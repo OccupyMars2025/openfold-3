@@ -188,7 +188,9 @@ class DiffusionModule(nn.Module):
             token_mask:
                 [*, N_token] Token mask
             atom_mask:
-                [*, N_atom] Atom mask
+                [*, N_atom] Atom mask. In the training step this is the
+                ground truth mask, but in the mini/full rollout this is
+                the padding mask.
             t:
                 [*] Noise level at a diffusion step
             si_input:
@@ -227,7 +229,6 @@ class DiffusionModule(nn.Module):
         # model (i.e. TemplateStack) so chunking is unnecessary for now.
         ai, ql, cl, plm = self.atom_attn_enc(
             batch=batch,
-            atom_mask=atom_mask,
             rl=rl_noisy,
             si_trunk=si_trunk,
             zij_trunk=zij,  # Use conditioned trunk representation
@@ -252,7 +253,6 @@ class DiffusionModule(nn.Module):
 
         rl_update = self.atom_attn_dec(
             batch=batch,
-            atom_mask=atom_mask,
             ai=ai,
             ql=ql,
             cl=cl,

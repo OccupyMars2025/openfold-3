@@ -460,7 +460,7 @@ class OpenFold3(nn.Module):
             batch=batch,
             xl_noisy=xl_noisy,
             token_mask=batch["token_mask"],
-            atom_mask=batch["atom_mask"],
+            atom_mask=atom_mask_gt,
             t=t,
             si_input=si_input,
             si_trunk=si_trunk,

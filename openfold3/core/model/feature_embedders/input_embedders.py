@@ -127,7 +127,6 @@ class InputEmbedderAllAtom(nn.Module):
         with torch.amp.autocast(device_type="cuda", dtype=torch.float32):
             a, _, _, _ = self.atom_attn_enc(
                 batch=batch,
-                atom_mask=batch["atom_mask"],
                 use_high_precision_attention=use_high_precision_attention,
             )
 

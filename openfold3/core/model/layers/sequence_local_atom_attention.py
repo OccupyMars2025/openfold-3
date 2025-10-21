@@ -471,7 +471,6 @@ class AtomAttentionEncoder(nn.Module):
     def forward(
         self,
         batch: TensorDict,
-        atom_mask: torch.Tensor,
         rl: torch.Tensor | None = None,
         si_trunk: torch.Tensor | None = None,
         zij_trunk: torch.Tensor | None = None,
@@ -494,8 +493,6 @@ class AtomAttentionEncoder(nn.Module):
                         and residue index in the reference conformer
                     - "token_mask": [*, N_token] token mask
                     - "num_atoms_per_token": [*, N_token] Number of atoms per token
-            atom_mask:
-                [*, N_atom] Atom mask
             rl:
                 [*, N_atom, 3] Noisy atom positions (optional)
             si_trunk:
@@ -515,6 +512,8 @@ class AtomAttentionEncoder(nn.Module):
                 [*, N_blocks, N_query, N_key, c_atom_pair] Atom pair representation
                 Note: Converted to block format ahead of time due to reduce memory cost
         """
+        atom_mask = batch["atom_mask"]  # Padding mask
+
         atom_feat_args = (
             batch,
             rl,
@@ -643,7 +642,6 @@ class AtomAttentionDecoder(nn.Module):
     def forward(
         self,
         batch: TensorDict,
-        atom_mask: torch.Tensor,
         ai: torch.Tensor,
         ql: torch.Tensor,
         cl: torch.Tensor,
@@ -656,8 +654,6 @@ class AtomAttentionDecoder(nn.Module):
                 Input feature dictionary. Features used in this function:
                     - "token_mask": [*, N_token] Token mask
                     - "num_atoms_per_token": [*, N_token] Number of atoms per token
-            atom_mask:
-                [*, N_atom] Atom mask
             ai:
                 [*, N_token, c_token] Token representation
             ql:
@@ -688,7 +684,7 @@ class AtomAttentionDecoder(nn.Module):
             a=ql,
             s=cl,
             z=plm,
-            mask=atom_mask,
+            mask=batch["atom_mask"],  # Padding mask
             use_high_precision_attention=use_high_precision_attention,
         )
 
