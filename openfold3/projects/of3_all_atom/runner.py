@@ -24,7 +24,6 @@ from pathlib import Path
 
 import pytorch_lightning as pl
 import torch
-import torch.distributed as dist
 from torchmetrics import MeanMetric, MetricCollection, PearsonCorrCoef
 
 from openfold3.core.loss.loss_module import OpenFold3Loss
@@ -38,6 +37,7 @@ from openfold3.core.metrics.validation_all_atom import (
     get_metrics_chunked,
 )
 from openfold3.core.runners.model_runner import ModelRunner
+from openfold3.core.utils.grad_manager import PerSampleGradManager
 from openfold3.core.utils.lr_schedulers import AlphaFoldLRScheduler
 from openfold3.core.utils.tensor_utils import tensor_tree_map
 from openfold3.core.utils.timing import PerformanceTimer
@@ -75,17 +75,30 @@ class OpenFold3AllAtom(ModelRunner):
             self.config.settings.model_selection_weight_scheme
         ]
 
+        # Settings for per-sample gradient clipping
         self.per_sample_grad_clipping = (
             model_config.settings.gradient_clipping.per_sample_clipping
         )
-        self.max_grad_norm = model_config.settings.gradient_clipping.clip_val
-        self.automatic_optimization = not self.per_sample_grad_clipping
+        self.grad_manager = None
+        if self.per_sample_clipping:
+            self.grad_manager = PerSampleGradManager(
+                gradient_clip_val=model_config.settings.gradient_clipping.clip_val,
+                accumulate_grad_batches=model_config.settings.manual_optimization.accumulate_grad_batches,
+                log_grad_norm=model_config.settings.debug.log_grad_norm,
+            )
+            self.automatic_optimization = False
 
     def setup(self, stage: str):
         # Setup metrics
         self._setup_train_metrics()
         self._setup_val_metrics()
         self._init_metric_enabled_tracker()
+
+        # Initialize the gradient manager if doing per-sample grad clipping
+        if self.per_sample_grad_clipping:
+            self.grad_manager.setup(
+                model=self.model, trainer=self.trainer, logger=self.logger
+            )
 
         # Keep grads enabled for confidence head parameters only
         if stage == "fit" and self.config.settings.train_confidence_only:
@@ -300,7 +313,6 @@ class OpenFold3AllAtom(ModelRunner):
                 metric_collection=metric_collection,
             )
 
-            # TODO: Maybe remove this extra logging
             # Only log steps for training
             if train:
                 self.log(
@@ -312,48 +324,11 @@ class OpenFold3AllAtom(ModelRunner):
                     sync_dist=False,
                 )
 
-    def _clip_per_sample_grads(self):
-        # Calculate the total norm of all parameter gradients for this
-        # single example.
-        grads = (p.grad.detach() for p in self.model.parameters() if p.grad is not None)
-        global_norm = torch.sqrt(sum([torch.sum(g.float() ** 2) for g in grads]))
-
-        if self.logger is not None and self.config.settings.debug.log_grad_norm:
-            self.log(
-                "grad_norm",
-                global_norm,
-                on_step=True,
-                on_epoch=False,
-                prog_bar=False,
-                logger=True,
-                sync_dist=True,
-            )
-
-        # Clip norm and compute rescale factor
-        # Note: We use maximum here to avoid CPU <-> GPU synchronization that can
-        # occur with additional conditional `if global_norm > self.max_grad_norm`
-        max_norm = torch.tensor(self.max_grad_norm, device=global_norm.device)
-        clip_coef = self.max_grad_norm / torch.maximum(global_norm, max_norm)
-
-        # Rescale gradients
-        for p in self.model.parameters():
-            if p.grad is not None:
-                p.grad.detach().mul_(clip_coef.to(p.dtype))
-
-    def _average_and_sync_grads(self):
-        # Average and sync the clipped per-example gradients across all GPUs.
-        if self.trainer.world_size > 1:
-            for p in self.model.parameters():
-                if p.grad is not None:
-                    dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
-
-    def _training_step_manual_clip(self, batch):
+    def _training_step_manual_clip(self, batch, batch_idx):
         assert len(batch["pdb_id"]) == 1, (
-            "Currently only mini-batch size of 1 per GPU is supported."
+            "Currently only local batch size of 1 per GPU is supported."
         )
-        assert self.trainer.accumulate_grad_batches == 1, (
-            "Gradient accumulation is not supported with per-sample gradient clipping."
-        )
+
         assert not self.deepspeed_is_initialized, (
             "Per-sample gradient clipping is not supported with DeepSpeed."
         )
@@ -382,12 +357,20 @@ class OpenFold3AllAtom(ModelRunner):
             # Compute loss
             loss, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
 
-            self.manual_backward(loss)
+            # When using DDP, this disables the automatic sync that would happen on
+            # manual_backward and break the per-sample grad clipping
+            with self.no_sync():
+                self.manual_backward(loss)
+                self.grad_manager.clip_and_accumulate()
 
-            self._clip_per_sample_grads()
-            self._average_and_sync_grads()
+            if self.grad_manager.is_step_ready(batch_idx):
+                # Average and sync grads
+                self.grad_manager.sync_grads()
 
-            opt.step()
+                opt.step()
+
+                # Zero the grad accumulator
+                self.grad_manager.reset_accumulator()
 
             # Log it
             self._log(loss_breakdown, batch, outputs)
@@ -397,6 +380,11 @@ class OpenFold3AllAtom(ModelRunner):
                 f"Train step failed with pdb id {pdb_id} with "
                 f"preferred chain or interface {preferred_chain_or_interface}"
             )
+
+            # Clear grad accumulator on error
+            # Only really necessary if trainer is not reinitialized after exception
+            self.grad_manager.reset_accumulator()
+
             raise
 
         return loss
@@ -437,9 +425,9 @@ class OpenFold3AllAtom(ModelRunner):
 
     def training_step(self, batch, batch_idx):
         if self.per_sample_grad_clipping:
-            return self._training_step_manual_clip(batch=batch)
-        else:
-            return self._training_step(batch=batch)
+            return self._training_step_manual_clip(batch=batch, batch_idx=batch_idx)
+
+        return self._training_step(batch=batch)
 
     def eval_step(self, batch, batch_idx):
         # At the start of validation, load the EMA weights

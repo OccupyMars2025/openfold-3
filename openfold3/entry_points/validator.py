@@ -131,6 +131,7 @@ class PlTrainerArgs(BaseModel):
     log_every_n_steps: int = 1
     enable_checkpointing: bool = True
     enable_model_summary: bool = False
+    accumulate_grad_batches: int = 1
 
     # Extra arguments that are not passed directly to pl.Trainer
     deepspeed_config_path: Path | None = None

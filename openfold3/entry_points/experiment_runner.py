@@ -268,9 +268,24 @@ class ExperimentRunner(ABC):
     @cached_property
     def trainer(self) -> pl.Trainer:
         """Create and return the trainer instance."""
-        trainer_args = self.pl_trainer_args.model_dump(
-            exclude={"deepspeed_config_path", "distributed_timeout", "mpi_plugin"}
-        )
+        exclude_args = {"deepspeed_config_path", "distributed_timeout", "mpi_plugin"}
+
+        # The training step with per-sample gradient clipping handles this internally
+        # PL does not support manual optimization with accumulate_grad_batches
+        if self.model_config.settings.gradient_clipping.per_sample_clipping:
+            exclude_args.add("accumulate_grad_batches")
+            accumulate_grad_batches = self.pl_trainer_args.accumulate_grad_batches
+            self.model_config.update(
+                {
+                    "settings": {
+                        "manual_optimization": {
+                            "accumulate_grad_batches": accumulate_grad_batches
+                        }
+                    }
+                }
+            )
+
+        trainer_args = self.pl_trainer_args.model_dump(exclude=exclude_args)
         trainer_args.update(
             {
                 "default_root_dir": self.output_dir,

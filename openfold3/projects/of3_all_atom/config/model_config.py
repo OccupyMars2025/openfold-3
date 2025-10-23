@@ -146,6 +146,9 @@ model_config = mlc.ConfigDict(
                 "per_sample_clipping": True,
                 "clip_val": 10.0,
             },
+            "manual_optimization": {
+                "accumulate_grad_batches": 1,
+            },
             "model_selection_weight_scheme": "initial_training",
             "debug": {
                 "log_grad_norm": False,
