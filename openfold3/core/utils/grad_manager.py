@@ -36,7 +36,11 @@ class PerSampleGradManager:
         self.accumulate_grad_batches = accumulate_grad_batches
         self.log_grad_norm = log_grad_norm
 
-        self.grad_accumulator = None
+        self.grad_accumulator = {}
+        self._params_to_update = {}
+
+        # Track the number of accumulated gradients
+        self.accum_count = 0
 
         # Pointers to these objects will be linked in the setup() call
         self._model = None
@@ -44,38 +48,57 @@ class PerSampleGradManager:
         self._logger = None
         self._device = None
 
+        # Cache max_norm tensor
+        self._max_norm_tensor = None
+
     def setup(
         self, model: torch.nn.Module, trainer: "pl.Trainer", logger: "pl.loggers.Logger"
     ):
         """
         Initializes the gradient accumulator and links essential components.
         This must be called from the LightningModule's setup() hook.
-
-        Args:
-            model: The model instance
-            trainer: The pl.Trainer instance
-            logger: The logger instance
         """
         self._model = model
         self._trainer = trainer
         self._logger = logger
 
-        self.grad_accumulator = [
-            torch.zeros_like(p, requires_grad=False)
-            for p in self._model.parameters()
-            if p.requires_grad
-        ]
+        self._params_to_update = {
+            name: p for name, p in self._model.named_parameters() if p.requires_grad
+        }
 
-        self._device = next(self._model.parameters()).device
+        self._device = next(iter(self._params_to_update.values())).device
 
+        self.grad_accumulator = {
+            name: torch.zeros_like(p, requires_grad=False)
+            for name, p in self._params_to_update.items()
+        }
+
+        if self.max_grad_norm is not None:
+            self._max_norm_tensor = torch.tensor(
+                self.max_grad_norm, device=self._device
+            )
+
+    @torch.no_grad()
     def _clip_grads(self):
         """Clips the gradients currently stored in self._model.parameters()"""
 
+        # Skip clipping if it's disabled
+        if self.max_grad_norm is None or self._max_norm_tensor is None:
+            return
+
+        params_with_grad = [
+            p for p in self._params_to_update.values() if p.grad is not None
+        ]
+
+        if not params_with_grad:
+            return
+
         # Calculate the total norm of all parameter gradients for this single example
-        grads = (
-            p.grad.detach() for p in self._model.parameters() if p.grad is not None
-        )
-        global_norm = torch.sqrt(sum([torch.sum(g.float() ** 2) for g in grads]))
+        per_tensor_norms = [
+            torch.linalg.vector_norm(p.grad.float(), ord=2) for p in params_with_grad
+        ]
+
+        global_norm = torch.linalg.vector_norm(torch.stack(per_tensor_norms), ord=2)
 
         if self._logger is not None and self.log_grad_norm:
             self._logger.log_metrics(
@@ -86,24 +109,47 @@ class PerSampleGradManager:
         # Clip norm and compute rescale factor
         # Note: We use maximum here to avoid CPU <-> GPU synchronization that can
         # occur with additional conditional `if global_norm > self.max_grad_norm`
-        max_norm = torch.tensor(self.max_grad_norm, device=global_norm.device)
-        clip_coef = self.max_grad_norm / torch.maximum(global_norm, max_norm)
+        clip_coef = self._max_norm_tensor / torch.maximum(
+            global_norm, self._max_norm_tensor
+        )
 
         # Rescale gradients
-        for p in self._model.parameters():
-            if p.grad is not None:
-                p.grad.detach().mul_(clip_coef.to(p.dtype))
+        for p in params_with_grad:
+            p.grad.mul_(clip_coef.to(p.dtype))
 
-    def _sync_grads(self):
+    @torch.no_grad()
+    def _sync_and_average_grads(self):
         """
-        Averages and syncs the gradients currently in self._model.parameters()
-        across all ranks.
+        Sums gradients across all ranks and averages by the
+        total number of accumulated samples globally.
         """
+        # Get global sum of accumulated samples
+        local_count = torch.tensor(
+            self.accum_count, dtype=torch.float32, device=self.device
+        )
         if self._trainer.world_size > 1:
-            for p in self._model.parameters():
-                if p.grad is not None:
-                    dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
+            dist.all_reduce(local_count, op=dist.ReduceOp.SUM)
 
+        global_count = local_count.item()
+
+        # If no samples were processed (edge case)
+        if global_count == 0:
+            # Zero the grads, they might contain stale values from the accumulator
+            for p in self._params_to_update.values():
+                if p.grad is not None:
+                    p.grad.zero_()
+            return
+
+        # Sum gradients across all ranks
+        for p in self._params_to_update.values():
+            if p.grad is not None:
+                if self._trainer.world_size > 1:
+                    dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
+
+                # Average by the global total number of samples
+                p.grad.div_(global_count)
+
+    @torch.no_grad()
     def clip_and_accumulate(self):
         """
         Clips the current per-sample gradient in self._model.parameters()
@@ -116,34 +162,34 @@ class PerSampleGradManager:
         self._clip_grads()
 
         # Manually accumulate clipped grads
-        param_iter = (p for p in self._model.parameters() if p.requires_grad)
-        for acc_grad, param in zip(self.grad_accumulator, param_iter):
+        for name, param in self._params_to_update.items():
             if param.grad is not None:
-                acc_grad.add_(param.grad.detach())
+                self.grad_accumulator[name].add_(param.grad)
 
+        # Increment the counter
+        self.accum_count += 1
+
+    @torch.no_grad()
     def sync_grads(self):
         """
         Prepares the gradients for the optimizer step.
         1. Copies the summed grads from the grad accumulator to
            self._model.parameters().
-        2. Averages the grads by the number of accumulation steps.
-        3. Syncs the averaged grads across all ranks.
+        2. Syncs and averages grads across all ranks by the
+           total number of accumulated samples.
 
         This should be called before opt.step().
         """
-        param_iter = (p for p in self._model.parameters() if p.requires_grad)
-        for acc_grad, param in zip(self.grad_accumulator, param_iter):
-            param.grad = acc_grad.clone()
-            if param.grad is not None:
-                param.grad.div_(self.accumulate_grad_batches)
+        # Copy summed grads from accumulator
+        for name, param in self._params_to_update.items():
+            param.grad = self.grad_accumulator[name].clone()
 
-        # Sync the locally-averaged gradients
-        self._sync_grads()
+        # Sync and average globally
+        self._sync_and_average_grads()
 
     def is_step_ready(self, batch_idx: int) -> bool:
         """
-        Checks if the optimizer step should be performed or gradients should be
-        accumulated for the current step.
+        Checks if the optimizer step should be performed.
         """
         if self._trainer.is_last_batch:
             return True
@@ -151,21 +197,29 @@ class PerSampleGradManager:
         is_last_step_of_cycle = (batch_idx + 1) % self.accumulate_grad_batches == 0
         return is_last_step_of_cycle
 
+    @torch.no_grad()
     def reset_accumulator(self):
         """
-        Resets the gradient accumulator to zeros.
+        Resets the gradient accumulator and counter to zeros.
         This should be called after opt.step().
         """
-        for acc_grad in self.grad_accumulator:
+        for acc_grad in self.grad_accumulator.values():
             acc_grad.zero_()
+
+        # Reset the counter
+        self.accum_count = 0
 
     @property
     def device(self):
         return self._device
 
+    @torch.no_grad()
     def to(self, device):
         self.grad_accumulator = tensor_tree_map(
             lambda t: t.to(device), self.grad_accumulator
         )
+        if self._max_norm_tensor is not None:
+            self._max_norm_tensor = self._max_norm_tensor.to(device)
+
         self._device = device
         return self
