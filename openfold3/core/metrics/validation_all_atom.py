@@ -535,31 +535,31 @@ def dockq(
     bs = asym_id_atomized.shape[:-1]
     n = asym_id_atomized.shape[-1:]
     dockq_result = DockQResult()
-
-    is_backbone = _get_atom_name_mask(ref_atom_name_chars_atomized, BACKBONE_ATOMS)
+    moltypes = ["protein", "rna", "dna"]
+    chain_id_to_moltype = {}
 
     chain_id_polymer = torch.unique(
-        asym_id_atomized[all_atom_mask.bool() & (not is_ligand_atomized)]
+        asym_id_atomized[all_atom_mask.bool() & (~is_ligand_atomized.bool())]
     ).to(torch.int32)
-    chain_id_to_moltype = {}
+
     for moltype_mask_atomized, moltype in zip(
-        [is_protein_atomized, is_rna_atomized, is_dna_atomized],
-        ["protein", "rna", "dna"],
+        [is_protein_atomized, is_rna_atomized, is_dna_atomized], moltypes
     ):
         asym_id_moltype_atomized = asym_id_atomized[all_atom_mask.bool()][
             moltype_mask_atomized[all_atom_mask.bool()]
         ]
         if torch.any(asym_id_moltype_atomized):
-            chain_id_to_moltype[moltype] = torch.unique(asym_id_moltype_atomized).to(
-                torch.int32
-            )
-        else:
-            chain_id_to_moltype[moltype] = None
+            chain_ids = torch.unique(asym_id_moltype_atomized).to(torch.int32)
+            for chain_id in chain_ids:
+                chain_id_to_moltype[chain_id.item()] = moltype
 
+    is_backbone = _get_atom_name_mask(ref_atom_name_chars_atomized, BACKBONE_ATOMS)
     if inter_filter_atomized is None:
-        inter_filter_atomized = torch.ones(bs + n + n)
+        inter_filter_atomized = torch.ones(
+            bs + n + n, dtype=torch.bool, device=asym_id_atomized.device
+        )
 
-    if bs[0] > 1:
+    if (len(bs) > 0) and (bs[0] > 1):
         raise NotImplementedError("DockQ for batch size > 1 not implemented.")
     for ci, cj in combinations(chain_id_polymer, 2):
         # Add moltype data
@@ -583,9 +583,9 @@ def dockq(
         # same chain
         if (
             torch.all(ni == 0)
-            | torch.all(nj == 0)
-            | ((ni.numel() > 1) & (ni_value.numel() > 1))
-            | ((nj.numel() > 1) & (nj_value.numel() > 1))
+            or torch.all(nj == 0)
+            or ((ni.numel() > 1) and (ni_value.numel() > 1))
+            or ((nj.numel() > 1) and (nj_value.numel() > 1))
         ):
             continue
 
@@ -599,10 +599,8 @@ def dockq(
         ).index_select(-1, atom_id_j)
 
         # Skip if no metrics are needed for this interface
-        if (
-            inter_filter_atomized_ij.shape[-1]
-            == 0 | inter_filter_atomized_ij.shape[-2]
-            == 0
+        if (inter_filter_atomized_ij.shape[-1] == 0) or (
+            inter_filter_atomized_ij.shape[-2] == 0
         ):
             continue
 
@@ -681,7 +679,7 @@ def dockq(
         ]
 
         # lRMSD
-        rec_idx = 0 if ni_value >= nj_value else 1
+        rec_idx = 0 if ni_value.item() >= nj_value.item() else 1
         lig_idx = 1 - rec_idx
         gt_coords_rec, gt_coords_lig = (
             (gt_coords_i, gt_coords_j)[rec_idx],
@@ -704,7 +702,9 @@ def dockq(
         rec_transform = get_optimal_transformation(
             mobile_positions=pred_coords_rec_bb,
             target_positions=gt_coords_rec_bb,
-            positions_mask=torch.ones(pred_coords_rec_bb.shape[:-1]),
+            positions_mask=torch.ones(
+                pred_coords_rec_bb.shape[:-1], device=pred_coords_rec_bb.device
+            ),
         )
         pred_coords_lig_bb_transformed = apply_transformation(
             pred_coords_lig_bb, rec_transform
@@ -749,17 +749,17 @@ def dockq(
             is_backbone_j & is_contact_gt_d_irmsd_atomized_j
         ].view(bs + (-1, 3))
 
-        gt_coords_if_bb = torch.concatenate(
-            [gt_coords_if_i_bb, gt_coords_if_j_bb], dim=-2
-        )
-        pred_coords_if_bb = torch.concatenate(
+        gt_coords_if_bb = torch.cat([gt_coords_if_i_bb, gt_coords_if_j_bb], dim=-2)
+        pred_coords_if_bb = torch.cat(
             [pred_coords_if_i_bb, pred_coords_if_j_bb], dim=-2
         )
 
         if_transform = get_optimal_transformation(
             mobile_positions=pred_coords_if_bb,
             target_positions=gt_coords_if_bb,
-            positions_mask=torch.ones(pred_coords_if_bb.shape[:-1]),
+            positions_mask=torch.ones(
+                pred_coords_if_bb.shape[:-1], device=pred_coords_rec_bb.device
+            ),
         )
         pred_coords_if_bb_transformed = apply_transformation(
             pred_coords_if_bb, if_transform
@@ -802,8 +802,9 @@ def dockq_full_complex(
     d1: float = 8.5,
     d2: float = 1.5,
     weight_by: Literal["n_contacts", "n_if_res"] = "n_contacts",
+    eps: float = 1e-10,
 ) -> dict[str, torch.Tensor]:
-    """Computes whole-complex dockq.
+    """Computes whole-complex DockQ score averaged across all interfaces.
 
     Returns both unweighted DockQ and DockQ weighted by either number of contacts or
     number of interface residues, per molecule type pair.
@@ -842,6 +843,8 @@ def dockq_full_complex(
             DockQ d2 parameter. Defaults to 1.5.
         weight_by (Literal['n_contacts', 'n_if_res'], optional):
             Metric to weight by. Defaults to "n_contacts".
+        eps (float):
+            Constant for numerical stability.
 
     Returns:
         dict[str, torch.Tensor]:
@@ -867,7 +870,7 @@ def dockq_full_complex(
     )
 
     out = {}
-    moltype_pairs = combinations_with_replacement(["protein", "rna", "dna"], 2)
+    moltype_pairs = list(combinations_with_replacement(["protein", "rna", "dna"], 2))
     aggregate_items = ["dockq_scores", "n_contacts", "n_if_res"]
     aggregator = {}
 
@@ -882,7 +885,7 @@ def dockq_full_complex(
             if aggregator[moltypes][iname] is None:
                 aggregator[moltypes][iname] = i.unsqueeze(-1)
             else:
-                aggregator[moltypes][iname] = torch.concatenate(
+                aggregator[moltypes][iname] = torch.cat(
                     [aggregator[moltypes][iname], i.unsqueeze(-1)], dim=-1
                 )
 
@@ -890,7 +893,9 @@ def dockq_full_complex(
         dockq_scores = metrics["dockq_scores"]
         dockq_scores_unweighted = torch.mean(dockq_scores, dim=-1)
         weight_metric = metrics[weight_by]
-        weights = weight_metric / torch.sum(weight_metric, dim=-1, keepdim=True)
+        weights = weight_metric / torch.clamp(
+            torch.sum(weight_metric, dim=-1, keepdim=True), min=eps
+        )
         dockq_scores_weighted = torch.sum(dockq_scores * weights, dim=-1)
 
         metric_name = f"val/dockq_{moltype_pair[0]}_{moltype_pair[1]}"
@@ -2229,7 +2234,9 @@ def get_metrics(
         if (
             len(
                 torch.unique(
-                    asym_id_atomized[all_atom_mask.bool() & (not is_ligand_atomized)]
+                    asym_id_atomized[
+                        all_atom_mask.bool() & (~is_ligand_atomized.bool())
+                    ]
                 ).to(torch.int32)
             )
             > 1
