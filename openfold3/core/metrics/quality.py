@@ -522,32 +522,34 @@ def dockq(
     d1: float = 8.5,
     d2: float = 1.5,
 ) -> DockQResult:
-    """Calculates per-interface DockQ scores.
+    """Calculates per-interface DockQ scores, separately for each diffusion sample.
+
+    Only batch size=1 implemented.
 
     Args:
         pred_coords (torch.Tensor):
-            Predicted coordinates of the complex [*, N_atom, 3].
+            Predicted coordinates of the complex [B, S, N_atom, 3].
         gt_coords (torch.Tensor):
-            Ground truth coordinates of the complex [*, N_atom, 3].
+            Ground truth coordinates of the complex [B, S, N_atom, 3].
         all_atom_mask (torch.Tensor):
-            Atom mask for unresolved atoms [*, N_atom].
+            Atom mask for unresolved atoms [B, S, N_atom].
         asym_id_atomized (torch.Tensor):
-            Per-atom asym IDs [*, N_atom].
+            Per-atom asym IDs [B, S, N_atom].
         res_id_atomized (torch.Tensor):
-            Per-atom residue IDs [*, N_atom].
+            Per-atom residue IDs [B, S, N_atom].
         ref_atom_name_chars_atomized (torch.Tensor):
-            Per-atom atom names in the AF3-stype encoding [*, N_atom, 4, 64].
+            Per-atom atom names in the AF3-stype encoding [B, S, N_atom, 4, 64].
         inter_filter_atomized (torch.Tensor):
-            Precomputed mask for which atom pairs to consider in the calculation [*,
+            Precomputed mask for which atom pairs to consider in the calculation [B, S,
             N_atom, N_atom].
         is_protein_atomized (torch.Tensor):
-            Per-atom protein mask [*, N_atom].
+            Per-atom protein mask [B, S, N_atom].
         is_rna_atomized (torch.Tensor):
-            Per-atom RNA mask [*, N_atom].
+            Per-atom RNA mask [B, S, N_atom].
         is_dna_atomized (torch.Tensor):
-            Per-atom DNA mask [*, N_atom].
+            Per-atom DNA mask [B, S, N_atom].
         is_ligand_atomized (torch.Tensor):
-            Per-atom ligand mask [*, N_atom].
+            Per-atom ligand mask [B, S, N_atom].
         d_fnat (float, optional):
             Contact threshold for FNAT calculation. Defaults to 5.0.
         d_irmsd (float, optional):
@@ -563,7 +565,8 @@ def dockq(
 
     Returns:
         DockQResult:
-            Per-interface DockQ scores and associated metadata [*].
+            Per-interface and per-diffusion-sample DockQ scores and associated metadata
+            [B].
     """
     bs = asym_id_atomized.shape[:-1]
     n = asym_id_atomized.shape[-1:]
@@ -595,224 +598,236 @@ def dockq(
     if (len(bs) > 0) and (bs[0] > 1):
         raise NotImplementedError("DockQ for batch size > 1 not implemented.")
     for ci, cj in combinations(chain_id_polymer, 2):
-        # Add moltype data
-        chain_id_pair = (ci.item(), cj.item())
+        for sample_idx in range(bs[-1]):
+            # Chain masks
+            is_ci = (asym_id_atomized[..., sample_idx, :] == ci) & all_atom_mask[
+                ..., sample_idx, :
+            ].bool()
+            is_cj = (asym_id_atomized[..., sample_idx, :] == cj) & all_atom_mask[
+                ..., sample_idx, :
+            ].bool()
 
-        # Chain masks
-        is_ci = (asym_id_atomized == ci) & all_atom_mask.bool()
-        is_cj = (asym_id_atomized == cj) & all_atom_mask.bool()
+            ni_value = torch.unique(torch.sum(is_ci, axis=-1))
+            nj_value = torch.unique(torch.sum(is_cj, axis=-1))
+            # Skip if no valid atoms or inconsistent number of atoms across samples for
+            # the same chain
+            if torch.all(ni_value == 0) or torch.all(nj_value == 0):
+                continue
 
-        # Chain atom counts
-        ni = torch.sum(is_ci, axis=-1, keepdim=True)
-        nj = torch.sum(is_cj, axis=-1, keepdim=True)
+            chain_id_pair = (ci.item(), cj.item(), sample_idx)
 
-        ni_value = torch.unique(ni)
-        nj_value = torch.unique(nj)
-        # Skip if no valid atoms or inconsistent number of atoms across samples for the
-        # same chain
-        if (
-            torch.all(ni == 0)
-            or torch.all(nj == 0)
-            or ((ni.numel() > 1) and (ni_value.numel() > 1))
-            or ((nj.numel() > 1) and (nj_value.numel() > 1))
-        ):
-            continue
+            # batch size > 1 not supported, so can just take the first sample's chain
+            # mask
+            atom_id_i = torch.where(is_ci[0])[0]
+            atom_id_j = torch.where(is_cj[0])[0]
 
-        # already enforced ni/nj uniformity, so can just take the first sample's chain
-        # mask
-        atom_id_i = torch.where(is_ci[0, 0])[0]
-        atom_id_j = torch.where(is_cj[0, 0])[0]
-
-        inter_filter_atomized_ij = inter_filter_atomized.index_select(
-            -2, atom_id_i
-        ).index_select(-1, atom_id_j)
-
-        # Skip if no metrics are needed for this interface
-        if (inter_filter_atomized_ij.shape[-1] == 0) or (
-            inter_filter_atomized_ij.shape[-2] == 0
-        ):
-            continue
-
-        # homo-multimers can cause some unexpected errors
-        try:
-            gt_coords_i = gt_coords[is_ci].view(bs + (ni_value.item(), 3))
-            gt_coords_j = gt_coords[is_cj].view(bs + (nj_value.item(), 3))
-            pred_coords_i = pred_coords[is_ci].view(bs + (ni_value.item(), 3))
-            pred_coords_j = pred_coords[is_cj].view(bs + (nj_value.item(), 3))
-            is_backbone_i = is_backbone[is_ci].view(bs + (ni_value.item(),))
-            is_backbone_j = is_backbone[is_cj].view(bs + (nj_value.item(),))
-        except RuntimeError as e:
-            print(
-                f"DockQ Error: Failed to extract per-chain features for chains {ci} "
-                f"and {cj}:\n{e}"
+            inter_filter_atomized_ij = (
+                inter_filter_atomized[..., sample_idx, :, :]
+                .index_select(-2, atom_id_i)
+                .index_select(-1, atom_id_j)
             )
-            continue
 
-        d_gt_ij_squared = torch.sum(
-            (gt_coords_i.unsqueeze(-2) - gt_coords_j.unsqueeze(-3)) ** 2, dim=-1
-        )
-        contacts_gt_d_fnat_atomized = (
-            d_gt_ij_squared < d_fnat**2
-        ) & inter_filter_atomized_ij
+            # Skip if no metrics are needed for this interface
+            if (
+                (inter_filter_atomized_ij.shape[-1] == 0)
+                or (inter_filter_atomized_ij.shape[-2] == 0)
+                or torch.all(torch.sum(inter_filter_atomized_ij, dim=[-1, -2]) == 0)
+            ):
+                continue
 
-        # Skip if no valid contacts
-        if not torch.any(contacts_gt_d_fnat_atomized):
-            continue
+            # homo-multimers can cause some unexpected errors
+            try:
+                gt_coords_i = gt_coords[..., sample_idx, :, :][is_ci].view(
+                    bs[:-1] + (ni_value.item(), 3)
+                )
+                gt_coords_j = gt_coords[..., sample_idx, :, :][is_cj].view(
+                    bs[:-1] + (nj_value.item(), 3)
+                )
+                pred_coords_i = pred_coords[..., sample_idx, :, :][is_ci].view(
+                    bs[:-1] + (ni_value.item(), 3)
+                )
+                pred_coords_j = pred_coords[..., sample_idx, :, :][is_cj].view(
+                    bs[:-1] + (nj_value.item(), 3)
+                )
+                is_backbone_i = is_backbone[..., sample_idx, :][is_ci].view(
+                    bs[:-1] + (ni_value.item(),)
+                )
+                is_backbone_j = is_backbone[..., sample_idx, :][is_cj].view(
+                    bs[:-1] + (nj_value.item(),)
+                )
+            except RuntimeError as e:
+                print(
+                    f"DockQ Error: Failed to extract per-chain features for chains {ci}"
+                    f" and {cj}:\n{e}"
+                )
+                continue
 
-        d_pred_ij_squared = torch.sum(
-            (pred_coords_i.unsqueeze(-2) - pred_coords_j.unsqueeze(-3)) ** 2, dim=-1
-        )
-        contacts_pred_d_fnat_atomized = (
-            d_pred_ij_squared < d_fnat**2
-        ) & inter_filter_atomized_ij
-
-        res_id_i = res_id_atomized[is_ci].view(bs + (-1,))
-        res_id_j = res_id_atomized[is_cj].view(bs + (-1,))
-
-        # FNAT
-        # Aggregate atom-wise to residue-wise contacts [*, ni, nj] -> [* ri, rj]
-        contacts_gt_d_fnat_res = aggregate_atom_feat_to_tokens_nd(
-            atom_feat=contacts_gt_d_fnat_atomized,
-            atom_dims=[-2, -1],
-            atom_to_token_index_list=[res_id_i, res_id_j],
-            aggregate_fn="any",
-        )
-        contacts_pred_d_fnat_res = aggregate_atom_feat_to_tokens_nd(
-            atom_feat=contacts_pred_d_fnat_atomized,
-            atom_dims=[-2, -1],
-            atom_to_token_index_list=[res_id_i, res_id_j],
-            aggregate_fn="any",
-        )
-
-        contacts_nat = contacts_gt_d_fnat_res.sum(dim=(-2, -1))
-        contacts_nat_recovered = (
-            contacts_gt_d_fnat_res & contacts_pred_d_fnat_res
-        ).sum(dim=(-2, -1))
-        fnat = contacts_nat_recovered.to(torch.float32) / torch.clamp(
-            contacts_nat, min=1.0
-        )
-
-        # Add contact data
-        dockq_result.chain_pair_to_n_contacts[chain_id_pair] = torch.sum(
-            contacts_gt_d_fnat_res, dim=[-1, -2]
-        )
-        dockq_result.chain_pair_to_n_if_res[chain_id_pair] = torch.sum(
-            torch.sum(contacts_gt_d_fnat_res, dim=-1) > 0, dim=-1
-        ) + torch.sum(torch.sum(contacts_gt_d_fnat_res, dim=-2) > 0, dim=-1)
-
-        del [
-            contacts_gt_d_fnat_atomized,
-            contacts_pred_d_fnat_atomized,
-            contacts_gt_d_fnat_res,
-            contacts_pred_d_fnat_res,
-        ]
-
-        # lRMSD
-        rec_idx = 0 if ni_value.item() >= nj_value.item() else 1
-        lig_idx = 1 - rec_idx
-        gt_coords_rec, gt_coords_lig = (
-            (gt_coords_i, gt_coords_j)[rec_idx],
-            (gt_coords_i, gt_coords_j)[lig_idx],
-        )
-        pred_coords_rec, pred_coords_lig = (
-            (pred_coords_i, pred_coords_j)[rec_idx],
-            (pred_coords_i, pred_coords_j)[lig_idx],
-        )
-        is_backbone_rc, is_backbone_lig = (
-            (is_backbone_i, is_backbone_j)[rec_idx],
-            (is_backbone_i, is_backbone_j)[lig_idx],
-        )
-
-        gt_coords_rec_bb = gt_coords_rec[is_backbone_rc].view(bs + (-1, 3))
-        gt_coords_lig_bb = gt_coords_lig[is_backbone_lig].view(bs + (-1, 3))
-        pred_coords_rec_bb = pred_coords_rec[is_backbone_rc].view(bs + (-1, 3))
-        pred_coords_lig_bb = pred_coords_lig[is_backbone_lig].view(bs + (-1, 3))
-
-        rec_transform = get_optimal_transformation(
-            mobile_positions=pred_coords_rec_bb,
-            target_positions=gt_coords_rec_bb,
-            positions_mask=torch.ones(
-                pred_coords_rec_bb.shape[:-1], device=pred_coords_rec_bb.device
-            ),
-        )
-        pred_coords_lig_bb_transformed = apply_transformation(
-            pred_coords_lig_bb, rec_transform
-        )
-
-        lrmsd_score = torch.sqrt(
-            torch.mean(
-                (gt_coords_lig_bb - pred_coords_lig_bb_transformed) ** 2, dim=(-2, -1)
+            d_gt_ij_squared = torch.sum(
+                (gt_coords_i.unsqueeze(-2) - gt_coords_j.unsqueeze(-3)) ** 2, dim=-1
             )
-        )
+            contacts_gt_d_fnat_atomized = (
+                d_gt_ij_squared < d_fnat**2
+            ) & inter_filter_atomized_ij
 
-        # iRMSD
-        # Get all atoms that belong to an interface residue at d_irmsd
-        contacts_gt_d_irmsd_atomized = (
-            d_gt_ij_squared < d_irmsd**2
-        ) & inter_filter_atomized_ij
-        is_contact_gt_d_irmsd_atomized_i = (
-            torch.sum(contacts_gt_d_irmsd_atomized, axis=-1) > 0
-        )
-        is_contact_gt_d_irmsd_atomized_j = (
-            torch.sum(contacts_gt_d_irmsd_atomized, axis=-2) > 0
-        )
-        is_contact_gt_d_irmsd_atomized_i = _spread_contacts(
-            is_contact_atom=is_contact_gt_d_irmsd_atomized_i,
-            atom_to_res_id=res_id_i,
-        )
-        is_contact_gt_d_irmsd_atomized_j = _spread_contacts(
-            is_contact_atom=is_contact_gt_d_irmsd_atomized_j,
-            atom_to_res_id=res_id_j,
-        )
-        # Get backbone coordinates of interface residues
-        gt_coords_if_i_bb = gt_coords_i[
-            is_backbone_i & is_contact_gt_d_irmsd_atomized_i
-        ].view(bs + (-1, 3))
-        gt_coords_if_j_bb = gt_coords_j[
-            is_backbone_j & is_contact_gt_d_irmsd_atomized_j
-        ].view(bs + (-1, 3))
-        pred_coords_if_i_bb = pred_coords_i[
-            is_backbone_i & is_contact_gt_d_irmsd_atomized_i
-        ].view(bs + (-1, 3))
-        pred_coords_if_j_bb = pred_coords_j[
-            is_backbone_j & is_contact_gt_d_irmsd_atomized_j
-        ].view(bs + (-1, 3))
+            # Skip if no valid contacts
+            if not torch.any(contacts_gt_d_fnat_atomized):
+                continue
 
-        gt_coords_if_bb = torch.cat([gt_coords_if_i_bb, gt_coords_if_j_bb], dim=-2)
-        pred_coords_if_bb = torch.cat(
-            [pred_coords_if_i_bb, pred_coords_if_j_bb], dim=-2
-        )
-
-        if_transform = get_optimal_transformation(
-            mobile_positions=pred_coords_if_bb,
-            target_positions=gt_coords_if_bb,
-            positions_mask=torch.ones(
-                pred_coords_if_bb.shape[:-1], device=pred_coords_if_bb.device
-            ),
-        )
-        pred_coords_if_bb_transformed = apply_transformation(
-            pred_coords_if_bb, if_transform
-        )
-
-        irmsd_score = torch.sqrt(
-            torch.mean(
-                (gt_coords_if_bb - pred_coords_if_bb_transformed) ** 2, dim=(-2, -1)
+            d_pred_ij_squared = torch.sum(
+                (pred_coords_i.unsqueeze(-2) - pred_coords_j.unsqueeze(-3)) ** 2, dim=-1
             )
-        )
+            contacts_pred_d_fnat_atomized = (
+                d_pred_ij_squared < d_fnat**2
+            ) & inter_filter_atomized_ij
 
-        # DockQ
-        dockq_score = (
-            fnat
-            + (1.0 / (1.0 + (lrmsd_score / d1) ** 2)).view(bs)
-            + (1.0 / (1.0 + (irmsd_score / d2) ** 2)).view(bs)
-        ) / 3.0
+            res_id_i = res_id_atomized[..., sample_idx, :][is_ci].view(bs[:-1] + (-1,))
+            res_id_j = res_id_atomized[..., sample_idx, :][is_cj].view(bs[:-1] + (-1,))
 
-        dockq_result.chain_pair_to_moltype[chain_id_pair] = (
-            chain_id_to_moltype[ci.item()],
-            chain_id_to_moltype[cj.item()],
-        )
-        dockq_result.chain_pair_to_dockq[chain_id_pair] = dockq_score
-    print(dockq_result)
+            # FNAT
+            # Aggregate atom-wise to residue-wise contacts [*, ni, nj] -> [* ri, rj]
+            contacts_gt_d_fnat_res = aggregate_atom_feat_to_tokens_nd(
+                atom_feat=contacts_gt_d_fnat_atomized,
+                atom_dims=[-2, -1],
+                atom_to_token_index_list=[res_id_i, res_id_j],
+                aggregate_fn="any",
+            )
+            contacts_pred_d_fnat_res = aggregate_atom_feat_to_tokens_nd(
+                atom_feat=contacts_pred_d_fnat_atomized,
+                atom_dims=[-2, -1],
+                atom_to_token_index_list=[res_id_i, res_id_j],
+                aggregate_fn="any",
+            )
+
+            contacts_nat = contacts_gt_d_fnat_res.sum(dim=(-2, -1))
+            contacts_nat_recovered = (
+                contacts_gt_d_fnat_res & contacts_pred_d_fnat_res
+            ).sum(dim=(-2, -1))
+            fnat = contacts_nat_recovered.to(torch.float32) / torch.clamp(
+                contacts_nat, min=1.0
+            )
+
+            # Add contact data
+            dockq_result.chain_pair_to_n_contacts[chain_id_pair] = torch.sum(
+                contacts_gt_d_fnat_res, dim=[-1, -2]
+            )
+            dockq_result.chain_pair_to_n_if_res[chain_id_pair] = torch.sum(
+                torch.sum(contacts_gt_d_fnat_res, dim=-1) > 0, dim=-1
+            ) + torch.sum(torch.sum(contacts_gt_d_fnat_res, dim=-2) > 0, dim=-1)
+
+            del [
+                contacts_gt_d_fnat_atomized,
+                contacts_pred_d_fnat_atomized,
+                contacts_gt_d_fnat_res,
+                contacts_pred_d_fnat_res,
+            ]
+
+            # lRMSD
+            rec_idx = 0 if ni_value.item() >= nj_value.item() else 1
+            lig_idx = 1 - rec_idx
+            gt_coords_rec, gt_coords_lig = (
+                (gt_coords_i, gt_coords_j)[rec_idx],
+                (gt_coords_i, gt_coords_j)[lig_idx],
+            )
+            pred_coords_rec, pred_coords_lig = (
+                (pred_coords_i, pred_coords_j)[rec_idx],
+                (pred_coords_i, pred_coords_j)[lig_idx],
+            )
+            is_backbone_rc, is_backbone_lig = (
+                (is_backbone_i, is_backbone_j)[rec_idx],
+                (is_backbone_i, is_backbone_j)[lig_idx],
+            )
+
+            gt_coords_rec_bb = gt_coords_rec[is_backbone_rc].view(bs[:-1] + (-1, 3))
+            gt_coords_lig_bb = gt_coords_lig[is_backbone_lig].view(bs[:-1] + (-1, 3))
+            pred_coords_rec_bb = pred_coords_rec[is_backbone_rc].view(bs[:-1] + (-1, 3))
+            pred_coords_lig_bb = pred_coords_lig[is_backbone_lig].view(
+                bs[:-1] + (-1, 3)
+            )
+
+            rec_transform = get_optimal_transformation(
+                mobile_positions=pred_coords_rec_bb,
+                target_positions=gt_coords_rec_bb,
+                positions_mask=torch.ones(
+                    pred_coords_rec_bb.shape[:-1], device=pred_coords_rec_bb.device
+                ),
+            )
+            pred_coords_lig_bb_transformed = apply_transformation(
+                pred_coords_lig_bb, rec_transform
+            )
+
+            lrmsd_score = torch.sqrt(
+                torch.mean(
+                    (gt_coords_lig_bb - pred_coords_lig_bb_transformed) ** 2,
+                    dim=(-2, -1),
+                )
+            )
+
+            # iRMSD
+            # Get all atoms that belong to an interface residue at d_irmsd
+            contacts_gt_d_irmsd_atomized = (
+                d_gt_ij_squared < d_irmsd**2
+            ) & inter_filter_atomized_ij
+            is_contact_gt_d_irmsd_atomized_i = (
+                torch.sum(contacts_gt_d_irmsd_atomized, axis=-1) > 0
+            )
+            is_contact_gt_d_irmsd_atomized_j = (
+                torch.sum(contacts_gt_d_irmsd_atomized, axis=-2) > 0
+            )
+            is_contact_gt_d_irmsd_atomized_i = _spread_contacts(
+                is_contact_atom=is_contact_gt_d_irmsd_atomized_i,
+                atom_to_res_id=res_id_i,
+            )
+            is_contact_gt_d_irmsd_atomized_j = _spread_contacts(
+                is_contact_atom=is_contact_gt_d_irmsd_atomized_j,
+                atom_to_res_id=res_id_j,
+            )
+            # Get backbone coordinates of interface residues
+            is_contact_bb_i = is_backbone_i & is_contact_gt_d_irmsd_atomized_i
+            is_contact_bb_j = is_backbone_j & is_contact_gt_d_irmsd_atomized_j
+
+            # Skip if no interface backbone atoms
+            if (is_contact_bb_i.sum() == 0) or (is_contact_bb_j.sum() == 0):
+                continue
+
+            gt_coords_if_i_bb = gt_coords_i[is_contact_bb_i].view(bs[:-1] + (-1, 3))
+            gt_coords_if_j_bb = gt_coords_j[is_contact_bb_j].view(bs[:-1] + (-1, 3))
+            pred_coords_if_i_bb = pred_coords_i[is_contact_bb_i].view(bs[:-1] + (-1, 3))
+            pred_coords_if_j_bb = pred_coords_j[is_contact_bb_j].view(bs[:-1] + (-1, 3))
+
+            gt_coords_if_bb = torch.cat([gt_coords_if_i_bb, gt_coords_if_j_bb], dim=-2)
+            pred_coords_if_bb = torch.cat(
+                [pred_coords_if_i_bb, pred_coords_if_j_bb], dim=-2
+            )
+
+            if_transform = get_optimal_transformation(
+                mobile_positions=pred_coords_if_bb,
+                target_positions=gt_coords_if_bb,
+                positions_mask=torch.ones(
+                    pred_coords_if_bb.shape[:-1], device=pred_coords_if_bb.device
+                ),
+            )
+            pred_coords_if_bb_transformed = apply_transformation(
+                pred_coords_if_bb, if_transform
+            )
+
+            irmsd_score = torch.sqrt(
+                torch.mean(
+                    (gt_coords_if_bb - pred_coords_if_bb_transformed) ** 2, dim=(-2, -1)
+                )
+            )
+
+            # DockQ
+            dockq_score = (
+                fnat
+                + (1.0 / (1.0 + (lrmsd_score / d1) ** 2)).view(bs[:-1])
+                + (1.0 / (1.0 + (irmsd_score / d2) ** 2)).view(bs[:-1])
+            ) / 3.0
+
+            dockq_result.chain_pair_to_moltype[chain_id_pair] = (
+                chain_id_to_moltype[ci.item()],
+                chain_id_to_moltype[cj.item()],
+            )
+            dockq_result.chain_pair_to_dockq[chain_id_pair] = dockq_score
     return dockq_result
 
 
@@ -840,30 +855,34 @@ def dockq_full_complex(
     Returns both unweighted DockQ and DockQ weighted by either number of contacts or
     number of interface residues, per molecule type pair.
 
+    Only batch size=1 implemented.
+
+    Note that this function averages values across diffision samples.
+
     Args:
         pred_coords (torch.Tensor):
-            Predicted coordinates of the complex [*, N_atom, 3].
+            Predicted coordinates of the complex [B, S, N_atom, 3].
         gt_coords (torch.Tensor):
-            Ground truth coordinates of the complex [*, N_atom, 3].
+            Ground truth coordinates of the complex [B, S, N_atom, 3].
         all_atom_mask (torch.Tensor):
-            Atom mask for unresolved atoms [*, N_atom].
+            Atom mask for unresolved atoms [B, S, N_atom].
         asym_id_atomized (torch.Tensor):
-            Per-atom asym IDs [*, N_atom].
+            Per-atom asym IDs [B, S, N_atom].
         res_id_atomized (torch.Tensor):
-            Per-atom residue IDs [*, N_atom].
+            Per-atom residue IDs [B, S,, N_atom].
         ref_atom_name_chars_atomized (torch.Tensor):
-            Per-atom atom names in the AF3-stype encoding [*, N_atom, 4, 64].
+            Per-atom atom names in the AF3-stype encoding [B, S, N_atom, 4, 64].
         inter_filter_atomized (torch.Tensor):
-            Precomputed mask for which atom pairs to consider in the calculation [*,
+            Precomputed mask for which atom pairs to consider in the calculation [B, S,
             N_atom, N_atom].
         is_protein_atomized (torch.Tensor):
-            Per-atom protein mask [*, N_atom].
+            Per-atom protein mask [B, S, N_atom].
         is_rna_atomized (torch.Tensor):
-            Per-atom RNA mask [*, N_atom].
+            Per-atom RNA mask [B, S, N_atom].
         is_dna_atomized (torch.Tensor):
-            Per-atom DNA mask [*, N_atom].
+            Per-atom DNA mask [B, S, N_atom].
         is_ligand_atomized (torch.Tensor):
-            Per-atom ligand mask [*, N_atom].
+            Per-atom ligand mask [B, S, N_atom].
         d_fnat (float, optional):
             Contact threshold for FNAT calculation. Defaults to 5.0.
         d_irmsd (float, optional):
@@ -879,7 +898,7 @@ def dockq_full_complex(
 
     Returns:
         dict[str, torch.Tensor]:
-            Molecule type pair to weighted and unweighted DockQ scores [*].
+            Molecule type pair to weighted and unweighted DockQ scores [B, 1].
     """
 
     dockq_result = dockq(
@@ -930,8 +949,8 @@ def dockq_full_complex(
         dockq_scores_weighted = torch.sum(dockq_scores * weights, dim=-1)
 
         metric_name = f"dockq_{moltype_pair[0]}_{moltype_pair[1]}"
-        out[f"{metric_name}_uw"] = dockq_scores_unweighted
-        out[f"{metric_name}_w"] = dockq_scores_weighted
+        out[f"{metric_name}_uw"] = dockq_scores_unweighted.unsqueeze(-1)
+        out[f"{metric_name}_w"] = dockq_scores_weighted.unsqueeze(-1)
 
     return out
 
@@ -1048,7 +1067,7 @@ def get_ab_ag_metrics(
     asym_id_atomized: torch.Tensor,
     eps: float = 1e-10,
 ) -> dict[str, torch.Tensor]:
-    """_summary_
+    """Compute AB/AG metrics.
 
     Args:
         intra_ab_ag_type_atomized (torch.Tensor):
