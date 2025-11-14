@@ -18,17 +18,24 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import random
 from collections import defaultdict, deque
 from collections.abc import Sequence
 from functools import partial
 
 import numpy as np
 import pandas as pd
+import torch
+from numpy.random import Generator, default_rng
 
 from openfold3.core.data.primitives.quality_control.logging_utils import (
     log_runtime_memory,
 )
-from openfold3.core.data.resources.residues import STANDARD_RESIDUES_WITH_GAP_1, MoleculeType, map_str_array_to_idx_array
+from openfold3.core.data.resources.residues import (
+    STANDARD_RESIDUES_WITH_GAP_1,
+    MoleculeType,
+    map_str_array_to_idx_array,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -501,7 +508,9 @@ class MsaArrayCollection:
     )
     chain_id_to_main_msa: dict[str, MsaArray] = dataclasses.field(default_factory=dict)
     chain_id_to_profile: dict[str, MsaArray] = dataclasses.field(default_factory=dict)
-    chain_id_to_deletion_mean: dict[str, MsaArray] = dataclasses.field(default_factory=dict)
+    chain_id_to_deletion_mean: dict[str, MsaArray] = dataclasses.field(
+        default_factory=dict
+    )
 
     # Prefeaturized attributes
     row_counts: dict[str, int | dict[str, int]] = dataclasses.field(
@@ -521,9 +530,9 @@ class MsaArrayCollection:
         self.chain_id_to_main_msa = {}
 
     def set_state_processed(
-        self, 
-        chain_id_to_query_seq, 
-        chain_id_to_paired_msa, 
+        self,
+        chain_id_to_query_seq,
+        chain_id_to_paired_msa,
         chain_id_to_main_msa,
         chain_id_to_profile,
         chain_id_to_deletion_mean,
@@ -1192,6 +1201,7 @@ def create_paired_from_preprocessed(
     # Map to per-chain
     return expand_paired_msas(msa_array_collection=msa_array_collection)
 
+
 def calculate_profile(
     msa_array: np.ndarray, molecule_type: MoleculeType, chunk_size: int
 ) -> np.ndarray:
@@ -1248,58 +1258,13 @@ def calculate_profile(
     return counts / n_rows
 
 
-@log_runtime_memory(
-    runtime_dict_key="runtime-msa-feat-precursor-profile-del-mean", multicall=True
-)
-def calculate_profile_del_mean(
-    msa_array_collection: MsaArrayCollection,
-    chain_id: str,
-    msa_profile_chunk_size: int = 1000,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Calculate the profile and mean deletion counts for a chain.
-
-    Args:
-        msa_array_collection (MsaArrayCollection):
-            The processed and pre-featurized collection of MSA arrays.
-        chain_id (str):
-            The chain ID of the chain to calculate the profile and mean deletion counts
-            for.
-        msa_profile_chunk_size (int):
-            The number of columns to simultaneously calculate the MSA profile for.
-
-    Returns:
-        tuple[np.ndarray, np.ndarray]:
-            The profile and mean deletion counts for the chain.
-    """
-    if bool(msa_array_collection.row_counts["n_rows_main"][chain_id]):
-        profile = calculate_profile(
-            msa_array_collection.chain_id_to_main_msa[chain_id].msa,
-            msa_array_collection.chain_id_to_mol_type[chain_id],
-            chunk_size=msa_profile_chunk_size,
-        )
-        del_mean = np.mean(
-            msa_array_collection.chain_id_to_main_msa[chain_id].deletion_matrix, axis=0
-        )
-    else:
-        profile = np.zeros(
-            [
-                msa_array_collection.chain_id_to_main_msa[chain_id].msa.shape[1],
-                len(STANDARD_RESIDUES_WITH_GAP_1),
-            ],
-        )
-        del_mean = np.zeros(
-            msa_array_collection.chain_id_to_main_msa[chain_id].msa.shape[1]
-        )
-
-    return profile, del_mean
-
-
 @log_runtime_memory(runtime_dict_key="runtime-msa-proc-create-main")
 def create_main(
     msa_array_collection: MsaArrayCollection,
     chain_id_to_paired_msa: dict[str, MsaArray],
     aln_order: list[str],
     keep_subsampled_order: bool,
+    generator: Generator | None = None,
 ) -> dict[str, MsaArray]:
     """Creates main MSA arrays from non-UniProt MSAs.
 
@@ -1318,16 +1283,23 @@ def create_main(
         keep_subsampled_order (bool):
             Whether to keep the order of sequences in the subsampled main MSA relative
             to the unsubsampled one.
+        generator (Generator | None):
+            Numpy generator for main MSA subsampling.
 
     Returns:
         dict[str, MsaArray]:
             List of MsaArrays containing the main MSA arrays and deletion matrices for
             each chain.
     """
+
+    if generator is None:
+        seed = random.randint(0, torch.iinfo(torch.int32).max)
+        generator = default_rng(seed=seed)
+
     # Iterate over representatives
-    rep_main_msas = {}
-    rep_profiles = {}
-    rep_del_means = {}
+    rep_id_to_main_msa = {}
+    rep_id_to_profile = {}
+    rep_id_to_del_mean = {}
 
     for rep_id, chain_data in msa_array_collection.rep_id_to_main_msa.items():
         chain_data = msa_array_collection.rep_id_to_main_msa[rep_id]
@@ -1344,9 +1316,10 @@ def create_main(
 
         # Get paired MSAs if any and deduplicate
         if len(chain_id_to_paired_msa) > 0:
-
             # The relevant paired MSA for this representative
-            paired_arr = chain_id_to_paired_msa[msa_array_collection.rep_id_to_chain_id[rep_id]].msa
+            paired_arr = chain_id_to_paired_msa[
+                msa_array_collection.rep_id_to_chain_id[rep_id]
+            ].msa
             arr = main_msa_redundant
 
             # 1) Convert each 2D array into a 1D "structured" view of type void This
@@ -1368,25 +1341,33 @@ def create_main(
             filtered_deletion = main_deletion_matrix_redundant
 
         # Get indices for subsampled main MSA - should be seeded by the worker context
-        rng = np.random.default_rng()
-        k = rng.integers(1, filtered_msa.shape[0] + 1)
-        idx = rng.choice(filtered_msa.shape[0], size=k, replace=False)
+        k = generator.integers(1, filtered_msa.shape[0] + 1)
+        idx = generator.choice(filtered_msa.shape[0], size=k, replace=False)
         if keep_subsampled_order:
             idx.sort()
 
         # Add to ID-MSA map
-        rep_main_msas[rep_id] = MsaArray(
+        rep_id_to_main_msa[rep_id] = MsaArray(
             msa=filtered_msa[idx, :],
             deletion_matrix=filtered_deletion[idx, :],
             metadata=pd.DataFrame(),
         )
 
         # Calculate profile and del mean from the redundant main MSA
-        # TODO
+        rep_id_to_profile[rep_id] = calculate_profile(
+            msa_array=main_msa_redundant,
+            molecule_type=msa_array_collection.rep_id_to_mol_type[rep_id],
+            chunk_size=1000,
+        )
+        rep_id_to_del_mean[rep_id] = np.mean(main_deletion_matrix_redundant, axis=0)
 
     # Reindex dicts from representatives to chain IDs
-    main_msas = {}
+    chain_id_to_main_msa = {}
+    chain_id_to_profile = {}
+    chain_id_to_del_mean = {}
     for chain_id, rep_id in msa_array_collection.chain_id_to_rep_id.items():
-        main_msas[chain_id] = rep_main_msas[rep_id]
+        chain_id_to_main_msa[chain_id] = rep_id_to_main_msa[rep_id]
+        chain_id_to_profile[chain_id] = rep_id_to_profile[rep_id]
+        chain_id_to_del_mean[chain_id] = rep_id_to_del_mean[rep_id]
 
-    return main_msas
+    return chain_id_to_main_msa, chain_id_to_profile, chain_id_to_del_mean

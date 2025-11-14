@@ -621,9 +621,13 @@ class MsaSampleParserInference(MsaSampleParser):
 
                 maps.chain_id_to_rep_id[chain_id] = rep_id
                 maps.chain_id_to_mol_type[chain_id] = chain_data.molecule_type
-                if (rep_id not in maps.rep_id_to_chain_id) & (len(main_msa_file_paths) > 0):
+                if (rep_id not in maps.rep_id_to_chain_id) & (
+                    len(main_msa_file_paths) > 0
+                ):
                     maps.rep_id_to_chain_id[rep_id] = chain_id
-                if (rep_id not in maps.rep_id_to_mol_type) & (len(main_msa_file_paths) > 0):
+                if (rep_id not in maps.rep_id_to_mol_type) & (
+                    len(main_msa_file_paths) > 0
+                ):
                     maps.rep_id_to_mol_type[rep_id] = chain_data.molecule_type
                 if (rep_id not in maps.rep_id_to_main_msa_paths) & (
                     len(main_msa_file_paths) > 0

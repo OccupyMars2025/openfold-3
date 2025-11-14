@@ -142,7 +142,12 @@ class LoggingMixin:
                 return_atom_arrays=True,
                 return_crop_strategy=True,
             )
-
+            msg = "{}, {}, {}".format(
+                pdb_id,
+                preferred_chain_or_interface,
+                sample_data["features"]["msa"].shape,
+            )
+            self.logger.info(msg)
             # Fetch recorded runtimes
             if self.log_runtimes:
                 runtimes = self.fetch_runtimes()

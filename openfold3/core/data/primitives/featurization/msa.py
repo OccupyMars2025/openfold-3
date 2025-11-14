@@ -127,12 +127,6 @@ def calculate_row_counts(
     )
 
 
-
-
-
-
-
-
 @log_runtime_memory(
     runtime_dict_key="runtime-msa-feat-precursor-crop-vstack", multicall=True
 )
@@ -318,13 +312,6 @@ def create_msa_feature_precursor_of3(
 
         # Process each chain
         for chain_id in msa_array_collection.chain_id_to_rep_id:
-            # MOVED TO SAMPLE PROCESSING CREATE MAIN - HERE JUST EXTRACT FROM COLLECTION
-            # # Calculate profile and del mean for chain across all main columns
-            # profile, del_mean = calculate_profile_del_mean(
-            #     msa_array_collection, chain_id
-            # )
-            profile, del_mean = None, None
-
             # Crop and vertically stack query, paired MSA and main MSA arrays
             msa_array_vstack, _ = crop_vstack_msa_arrays(
                 msa_array_collection,
@@ -338,8 +325,8 @@ def create_msa_feature_precursor_of3(
                 msa_feature_precursor=msa_feature_precursor,
                 msa_array_vstack=msa_array_vstack,
                 msa_array_vstack_mask=None,
-                profile=profile,
-                del_mean=del_mean,
+                profile=msa_array_collection.chain_id_to_profile[chain_id],
+                del_mean=msa_array_collection.chain_id_to_deletion_mean[chain_id],
                 msa_token_mapper=msa_token_mapper,
                 molecule_type=msa_array_collection.chain_id_to_mol_type[chain_id],
             )

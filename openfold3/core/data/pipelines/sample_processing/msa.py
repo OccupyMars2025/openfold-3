@@ -104,10 +104,12 @@ class MsaSampleProcessor:
         chain_id_to_paired_msa = self.create_paired_msa(
             input=input, msa_array_collection=msa_array_collection
         )
-        chain_id_to_main_msa = self.create_main_msa(
-            input=input,
-            msa_array_collection=msa_array_collection,
-            chain_id_to_paired_msa=chain_id_to_paired_msa,
+        chain_id_to_main_msa, chain_id_to_profile, chain_id_to_deletion_mean = (
+            self.create_main_msa(
+                input=input,
+                msa_array_collection=msa_array_collection,
+                chain_id_to_paired_msa=chain_id_to_paired_msa,
+            )
         )
 
         # Update MsaArrayCollection with processed MSA data
@@ -115,6 +117,8 @@ class MsaSampleProcessor:
             chain_id_to_query_seq=chain_id_to_query_seq,
             chain_id_to_paired_msa=chain_id_to_paired_msa,
             chain_id_to_main_msa=chain_id_to_main_msa,
+            chain_id_to_profile=chain_id_to_profile,
+            chain_id_to_deletion_mean=chain_id_to_deletion_mean,
         )
 
         return msa_array_collection
