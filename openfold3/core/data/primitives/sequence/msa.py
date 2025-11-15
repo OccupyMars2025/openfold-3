@@ -229,7 +229,7 @@ class MsaArray:
                 )
             # metadata: can only stitch if all are array-like
             if all(isinstance(md, pd.DataFrame) for md in metas):
-                meta_concat = pd.DataFrame()  # pd.concat(metas, ignore_index=True)
+                meta_concat = pd.concat(metas, ignore_index=True)
             elif all(isinstance(md, (list, np.ndarray)) for md in metas):
                 meta_concat = np.concatenate([np.asarray(md) for md in metas], axis=0)
             else:
@@ -668,6 +668,55 @@ def extract_alignments_to_pair(
     return msa_arrays_to_pair
 
 
+def cap_seqs_per_species(msa: MsaArray, max_seq_per_species: int) -> MsaArray:
+    """Subsets the number of sequences per species to max_seq_per_species.
+
+    Args:
+        msa (MsaArray):
+            Input MsaArray object to subset.
+        max_seq_per_species (int):
+            Maximum number of sequences to keep per species.
+
+    Returns:
+        MsaArray:
+            A new MsaArray object containing at most max_seq_per_species sequences per
+            species.
+    """
+    metadata = msa.metadata
+    if "species_id" not in metadata.columns:
+        raise ValueError(
+            "MsaArray metadata must contain species_id column to cap sequences per "
+            "species."
+        )
+
+    groups = []
+    for _, block in metadata.groupby("species_id", sort=False):
+        block_length = min(len(block), max_seq_per_species)
+        rows = block.index[:block_length]
+        groups.append(
+            MsaArray(
+                msa=msa.msa[rows],
+                deletion_matrix=msa.deletion_matrix[rows],
+                metadata=metadata.iloc[rows].reset_index(drop=True),
+            )
+        )
+    if not groups:
+        raise ValueError("No sequences found in MsaArray to cap per species.")
+    filtered_msa_array = MsaArray.multi_concatenate(groups, axis=0)
+    # Pre-concatenate the query sequence and deletion matrix which doesn't have metadata
+    return MsaArray.multi_concatenate(
+        [
+            MsaArray(
+                msa=msa.msa[0:1, :],
+                deletion_matrix=msa.deletion_matrix[0:1, :],
+                metadata=pd.DataFrame(),
+            ),
+            filtered_msa_array,
+        ],
+        axis=0,
+    )
+
+
 def process_msa_pairing_metadata(metadata_raw: list[str]) -> pd.DataFrame:
     """Parses the species info from a list of fasta headers.
 
@@ -788,9 +837,7 @@ def get_pairing_masks(
     """Generates masks for the pairing process.
 
     Useful for excluding things like species that occur only in one chain (will not be
-    pairable) or species that occur too frequently in the MSA of a single chain (as done
-    in the AF2-Multimer pairing code:
-    https://github.com/google-deepmind/alphafold/blob/main/alphafold/data/msa_pairing.py#L216).
+    pairable).
 
     Args:
         count_array (np.ndarray[np.int]):
@@ -807,12 +854,6 @@ def get_pairing_masks(
     if "shared_by_two" in pairing_mask_keys:
         # Find species that are shared by at least two chains
         pairing_masks = pairing_masks & (np.sum(count_array != 0, axis=0) > 1)
-
-    if "less_than_600" in pairing_mask_keys:
-        # Find species that occur not more than 600 times in any single chain
-        pairing_masks = pairing_masks & (
-            np.sum(count_array <= 600, axis=0) == count_array.shape[0]
-        )
 
     return pairing_masks
 
@@ -1084,6 +1125,7 @@ def create_paired(
     max_rows_paired: int,
     min_chains_paired_partial: int,
     pairing_mask_keys: list[str],
+    max_seq_per_species: int,
     msas_to_pair: Sequence[str] | None,
 ) -> dict[str, MsaArray]:
     """Creates paired MSA arrays from UniProt MSAs.
@@ -1105,6 +1147,8 @@ def create_paired(
             the number of unique chains in the crop or assembly.
         pairing_mask_keys (list[str]):
             List of strings indicating which mask to add.
+        max_seq_per_species (int):
+            Max number of sequences to keep per species from each chain's MSA.
         msas_to_pair (list[str]):
             Msas to to pair for online pairing
 
@@ -1125,6 +1169,10 @@ def create_paired(
             msa_arrays_to_pair[chain_id].metadata
         )
         sort_msa_by_distance_to_query(msa_arrays_to_pair[chain_id])
+
+    if max_seq_per_species is not None:
+        for rep_id, msa in msa_arrays_to_pair.items():
+            msa_arrays_to_pair[rep_id] = cap_seqs_per_species(msa, max_seq_per_species)
 
     # Count species occurrences per chain
     count_array, species = count_species_per_chain(msa_arrays_to_pair)

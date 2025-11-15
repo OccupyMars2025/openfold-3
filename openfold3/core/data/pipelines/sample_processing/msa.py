@@ -51,6 +51,7 @@ class MsaSampleProcessor:
             max_rows_paired=config.max_rows_paired,
             min_chains_paired_partial=config.min_chains_paired_partial,
             pairing_mask_keys=config.pairing_mask_keys,
+            max_seq_per_species=config.max_seq_per_species,
             msas_to_pair=config.msas_to_pair,
         )
         self.main_msa_processor = partial(
