@@ -110,7 +110,6 @@ def vstack_pad_msa_arrays(
 
     # Paired MSA
     if msa_array_collection.row_counts.n_rows_paired_subsampled > 0:
-        print(msa_array_collection.row_counts)
         msa_array_vstack = msa_array_vstack.concatenate(
             msa_array_collection.chain_id_to_paired_msa[chain_id], axis=0
         )
