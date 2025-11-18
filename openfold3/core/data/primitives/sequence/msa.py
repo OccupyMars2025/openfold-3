@@ -424,8 +424,10 @@ class MsaArray:
         """
         msa = self.msa[row_mask, :]
         deletion_matrix = self.deletion_matrix[row_mask, :]
-        if isinstance(self.metadata, pd.DataFrame):
+        if isinstance(self.metadata, np.ndarray):
             metadata = self.metadata[row_mask]
+        elif isinstance(self.metadata, pd.DataFrame):
+            metadata = self.metadata.iloc[row_mask]
         else:
             ## is python list
             metadata = [
@@ -661,9 +663,15 @@ def extract_alignments_to_pair(
         for msa_name in msas_to_pair:
             m = rep_msa_map_per_chain.get(msa_name)
             if m is not None:
-                msa_arrays_to_pair_i.append(m)
+                # exclude query from subsequent MSAs
+                if len(msa_arrays_to_pair_i) > 0:
+                    non_query_mask = np.bool([1] * len(m.msa.shape[0]))
+                    len(m.msa.shape[0])[0] = False
+                    m = m.subset(non_query_mask)
+                if len(m) > 1:
+                    msa_arrays_to_pair_i.append(m)
 
-        if msa_arrays_to_pair_i:
+        if len(msa_arrays_to_pair_i) > 0:
             msa_arrays_to_pair_cat = MsaArray.multi_concatenate(
                 msa_arrays=msa_arrays_to_pair_i,
                 axis=0,
@@ -702,8 +710,8 @@ def cap_seqs_per_species(msa: MsaArray, max_seq_per_species: int) -> MsaArray:
         rows = block.index[:block_length]
         groups.append(
             MsaArray(
-                msa=msa.msa[rows],
-                deletion_matrix=msa.deletion_matrix[rows],
+                msa=msa.msa[rows + 1],
+                deletion_matrix=msa.deletion_matrix[rows + 1],
                 metadata=metadata.iloc[rows].reset_index(drop=True),
             )
         )
@@ -953,10 +961,11 @@ def find_pairing_indices(
             paired_species_rows[-1] = paired_species_rows[-1][:n_rows_final, :]
             break
 
-    # Concatenate all paired arrays into a single paired array
-    paired_rows_index = np.concatenate(paired_species_rows, axis=0)
-
-    return paired_rows_index
+    if not paired_species_rows:
+        return np.empty((0, count_array.shape[0]), dtype=int)
+    else:
+        # Concatenate all paired arrays into a single paired array
+        return np.concatenate(paired_species_rows, axis=0)
 
 
 def _num_encode_species(
@@ -1175,7 +1184,6 @@ def create_paired(
         msa_arrays_to_pair[chain_id].metadata = process_msa_pairing_metadata(
             msa_arrays_to_pair[chain_id].metadata
         )
-        sort_msa_by_distance_to_query(msa_arrays_to_pair[chain_id])
 
     if max_seq_per_species is not None:
         for rep_id, msa in msa_arrays_to_pair.items():
@@ -1198,6 +1206,8 @@ def create_paired(
         max_rows_paired,
         min_chains_paired_partial,
     )
+    if paired_rows_index.size == 0:
+        return {}
 
     # Map species indices back to MSA row indices
     paired_msa_per_chain = map_to_paired_msa_per_chain(
