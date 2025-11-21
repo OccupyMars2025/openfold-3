@@ -32,7 +32,7 @@ from openfold3.core.data.primitives.sequence.msa import (
     MsaArrayCollection,
     create_main,
     create_paired,
-    create_paired_from_preprocessed,
+    create_paired_from_precomputed,
     create_query_seqs,
     find_monomer_homomer,
 )
@@ -238,7 +238,7 @@ class MsaSampleProcessorInference(MsaSampleProcessor):
             # Use precomputed paired MSAs
             # TODO modularize better
             if len(msa_array_collection.rep_id_to_paired_msa) > 0:
-                chain_id_to_paired_msa = create_paired_from_preprocessed(
+                chain_id_to_paired_msa = create_paired_from_precomputed(
                     msa_array_collection=msa_array_collection,
                     max_rows_paired=self.config.max_rows_paired,
                     paired_msa_order=self.config.paired_msa_order,
