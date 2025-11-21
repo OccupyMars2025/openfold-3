@@ -48,6 +48,8 @@ class MSASettings(BaseModel):
             chains ... down to any 3 of the 7 chains.
         pairing_mask_keys (list[str]):
             Masks to apply during online pairing to exclude certain sequences.
+        max_seq_per_species (int):
+            Max number of sequences to keep per species in each chain's paired MSA.
         moltypes (list[MoleculeType]):
             Molecule types to generate MSA features for. Only "protein" and "rna" are
             supported.
@@ -70,6 +72,7 @@ class MSASettings(BaseModel):
     subsample_with_bands: bool = False
     min_chains_paired_partial: int = 2
     pairing_mask_keys: list[str] = ["shared_by_two", "less_than_600"]
+    max_seq_per_species: int = 600
     moltypes: Annotated[list[MoleculeType], BeforeValidator(_convert_molecule_type)] = [
         MoleculeType.PROTEIN,
         MoleculeType.RNA,
@@ -102,6 +105,7 @@ class MSASettings(BaseModel):
         "colabfold_main",
         "dummy",  # aln containing only query; used for MSA-free inference
     ]
+    keep_subsampled_order: bool = False
     paired_msa_order: list = ["colabfold_paired"]
 
 

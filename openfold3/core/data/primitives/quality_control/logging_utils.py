@@ -456,9 +456,9 @@ def encode_interface(res_pairs: np.ndarray, chain_pairs: np.ndarray) -> str:
 
     Args:
         res_pairs (np.ndarray):
-            Array of residue index pairs.
+            Array of residue index pairs (N, 2).
         chain_pairs (np.ndarray):
-            Array of chain index pairs.
+            Array of chain index pairs  (N, 2).
 
     Returns:
         str:
@@ -468,21 +468,17 @@ def encode_interface(res_pairs: np.ndarray, chain_pairs: np.ndarray) -> str:
     unique_contacts = np.unique(
         np.concatenate([res_pairs, chain_pairs], axis=-1), axis=0
     )
-    return ";".join(
-        np.core.defchararray.add(
-            np.core.defchararray.add(
-                np.core.defchararray.add(
-                    np.core.defchararray.add(unique_contacts[:, 2], "."),
-                    unique_contacts[:, 0],
-                ),
-                "-",
-            ),
-            np.core.defchararray.add(
-                np.core.defchararray.add(unique_contacts[:, 3], "."),
-                unique_contacts[:, 1],
-            ),
-        )
-    )
+    # Make sure everything is string-typed
+    c1 = unique_contacts[:, 2].astype(str)
+    r1 = unique_contacts[:, 0].astype(str)
+    c2 = unique_contacts[:, 3].astype(str)
+    r2 = unique_contacts[:, 1].astype(str)
+
+    left = np.char.add(np.char.add(c1, "."), r1)
+    right = np.char.add(np.char.add(c2, "."), r2)
+
+    contacts_str = np.char.add(np.char.add(left, "-"), right)
+    return ";".join(contacts_str)
 
 
 def get_interface_string(
