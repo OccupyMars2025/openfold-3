@@ -206,7 +206,7 @@ class ProteinMonomerConfig(DefaultDatasetConfigSection):
 
 @register_dataset_config("RNAMonomerDataset")
 class RNAMonomerConfig(DefaultDatasetConfigSection):
-    sample_in_order: bool = True
+    sample_in_order: bool = False
     crop: CropSettings = CropSettings(
         crop_weights={
             "contiguous": 0.25,
