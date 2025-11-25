@@ -2170,6 +2170,7 @@ class TemplatePrecachePreprocessor:
                         chain_id_to_mol_type_path, allow_pickle=True
                     )["chain_id_to_mol_type"].item()
 
+                drop_chains = []
                 for chain_id in chain_id_seq_map:
                     chain_mol_type = (
                         MoleculeType(chain_id_to_mol_type[chain_id])
@@ -2205,30 +2206,46 @@ class TemplatePrecachePreprocessor:
                         is_cb = structure_array.atom_name == "CB"
                         is_pseudo_beta_atom = (is_gly & is_ca) | (~is_gly & is_cb)
 
+                        enough_resolved = True
                         for mask, mask_name in zip(
                             [is_n, is_ca, is_c, is_pseudo_beta_atom],
                             ["backbone N", "backbone CA", "backbone C", "pseudo beta"],
                             strict=True,
                         ):
                             f_resolved = np.sum(
-                                structure_array[mask].occupancy == 1
+                                structure_array[mask].occupancy > 0
                             ) / np.clip(np.sum(mask), 1, None)
 
                             if f_resolved <= self.min_f_resolved:
-                                raise Exception(
+                                enough_resolved = False
+                                print(
                                     f"Not enough resolved {mask_name} atoms in entry"
-                                    f" {template_entry_id} chain {chain_id}:"
-                                    f"{f_resolved} <= {self.min_f_resolved}."
+                                    f" {template_entry_id} chain {chain_id}: "
+                                    f"{f_resolved} <= {self.min_f_resolved}. Skipping"
+                                    " this template chain."
                                 )
+                                break
+                        if not enough_resolved:
+                            drop_chains.append(chain_id)
 
-            # Save precache if all checks pass
-            np.savez_compressed(
-                precache_entry_file,
-                **{
-                    "release_date": release_date,
-                    "chain_id_seq_map": chain_id_seq_map,
-                },
-            )
+                for chain_id in drop_chains:
+                    del chain_id_seq_map[chain_id]
+
+            if len(chain_id_seq_map) == 0:
+                print(
+                    f"No chains passing filtering for precache entry "
+                    f"{template_entry_id}. Skipping."
+                )
+                return
+            else:
+                # Save precache if all checks pass
+                np.savez_compressed(
+                    precache_entry_file,
+                    **{
+                        "release_date": release_date,
+                        "chain_id_seq_map": chain_id_seq_map,
+                    },
+                )
         except Exception as e:
             print(
                 f"Failed to create template precache entry "
