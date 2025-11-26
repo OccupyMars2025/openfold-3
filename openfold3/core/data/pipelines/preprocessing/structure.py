@@ -165,16 +165,6 @@ def cleanup_structure_of3(
             `metadata_extraction.get_cif_block`)
         ccd:
             CIFFile containing the parsed CCD (components.cif)
-        precrop_n_chains:
-            Number of chains to keep in the precropping step. If the structure has less
-            than N chains, all of them are kept. Default is 20.
-        precrop_disable_rna:
-            If True and if the structure contains RNA, skip the N-chain precropping.
-        precrop_ignore_ligands_below:
-            Ligand chains with fewer atoms than this value will be ignored in the
-            N-chain counter for precropping, and included based on proximity to the
-            selected chains. Set this to inf to ignore all ligands from the chain
-            budget.
 
     Returns:
         AtomArray with all cleaning steps applied
@@ -497,6 +487,7 @@ def preprocess_structure_and_write_outputs_of3(
             strict=True,
         )
     }
+    logger.info(f"Processing structure with {len(chain_to_pdb_chain)} chains.")
     logger.info(f"label_asym_id to new chain_id mapping: {chain_to_pdb_chain}")
 
     # Cleanup structure and extract metadata
@@ -626,10 +617,6 @@ class _OF3PreprocessingWrapper:
                         max_polymer_chains=self.max_polymer_chains,
                         skip_components=self.skip_components,
                         output_formats=self.output_formats,
-                        precrop_n_chains=self.precrop_n_chains,
-                        precrop_disable_rna=self.precrop_disable_rna,
-                        precrop_ignore_ligands_below=self.precrop_ignore_ligands_below,
-                        random_seed=self.random_seed,
                     )
                 )
 
