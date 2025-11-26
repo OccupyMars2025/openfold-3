@@ -18,14 +18,12 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import random
 from collections import defaultdict, deque
 from collections.abc import Sequence
 from functools import partial
 
 import numpy as np
 import pandas as pd
-from numpy.random import Generator, default_rng
 
 from openfold3.core.data.primitives.quality_control.logging_utils import (
     log_runtime_memory,
@@ -593,31 +591,6 @@ def find_monomer_homomer(msa_array_collection: MsaArrayCollection) -> bool:
     )
 
 
-@log_runtime_memory(runtime_dict_key="runtime-msa-proc-create-query")
-def create_query_seqs(msa_array_collection: MsaArrayCollection) -> dict[int, MsaArray]:
-    """Extracts and expands the query sequences and deletion matrices.
-
-    Args:
-        msa_array_collection (MsaArrayCollection):
-            A collection of Msa objects and chain IDs for a single sample.
-
-    Returns:
-        dict[int, MsaArray]:
-            Dict of MsaArray objects containing the query sequence and deletion matrix
-            for each chain, indexed by chain id.
-    """
-    return {
-        k: MsaArray(
-            msa=msa_array_collection.rep_id_to_query_seq[v],
-            deletion_matrix=np.zeros(
-                msa_array_collection.rep_id_to_query_seq[v].shape, dtype=int
-            ),
-            metadata=pd.DataFrame(),
-        )
-        for (k, v) in msa_array_collection.chain_id_to_rep_id.items()
-    }
-
-
 def extract_alignments_to_pair(
     msa_array_collection: MsaArrayCollection, msas_to_pair: Sequence[str] | None = None
 ) -> dict[str, MsaArray]:
@@ -772,29 +745,7 @@ def process_msa_pairing_metadata(metadata_raw: list[str]) -> pd.DataFrame:
     return metadata
 
 
-def sort_msa_by_distance_to_query(msa_array: MsaArray) -> None:
-    """Reorders the MSA array based on the distance to the query sequence.
-
-    Reorders all class attributes of the MSA object.
-
-    Args:
-        msa (MsaAarray):
-            The parsed MsaArray.
-
-    Returns:
-        None
-    """
-    _msa_array = msa_array.msa
-    distance_to_query = np.sum(_msa_array == _msa_array[0, :], axis=-1) / float(
-        sum(_msa_array[0, :] != "-")
-    )
-    sorting_indices = np.argsort(distance_to_query)[::-1]
-    msa_array.msa = _msa_array[sorting_indices, :]
-    msa_array.metadata = msa_array.metadata.iloc[sorting_indices[1:] - 1]
-    msa_array.deletion_matrix = msa_array.deletion_matrix[sorting_indices, :]
-
-
-def count_species_per_chain(
+def count_species_per_rep(
     msa_arrays_to_pair: dict[str, MsaArray],
 ) -> tuple[np.ndarray[np.int], list[str]]:
     """Counts the occurrences of sequences from species in each chain's UniProt MSA.
@@ -810,8 +761,8 @@ def count_species_per_chain(
             and the list species with at least one sequence among MSAs of all chains.
     """
     species = []
-    for chain_id in msa_arrays_to_pair:
-        species.extend(set(msa_arrays_to_pair[chain_id].metadata["species_id"]))
+    for rep_id in msa_arrays_to_pair:
+        species.extend(set(msa_arrays_to_pair[rep_id].metadata["species_id"]))
     species = np.array(sorted(set(species)))
     species_index = np.arange(len(species))
     species_index_map = {species[i]: i for i in species_index}
@@ -819,11 +770,11 @@ def count_species_per_chain(
     # Get lists of species per chain
     species_index_per_chain = [
         np.array(
-            msa_arrays_to_pair[chain_id]
+            msa_arrays_to_pair[rep_id]
             .metadata["species_id"]
             .apply(lambda x: species_index_map[x])
         )
-        for chain_id in msa_arrays_to_pair
+        for rep_id in msa_arrays_to_pair
     ]
 
     # Combine all lists into one array
@@ -900,7 +851,7 @@ def find_pairing_indices(
 
     Returns:
         np.ndarray[int]:
-            A tuple of arrays containing the indices that pair rows in MSAs of an
+            An array containing the indices that pair rows in MSAs of an
             assembly across chains with -1 at partially paired positions.
     """
     # Apply filters
@@ -953,12 +904,6 @@ def find_pairing_indices(
 
         # If row cutoff reached, crop final arrays to the row cutoff and break
         if n_rows >= max_rows_paired:
-            n_rows_final = max_rows_paired - sum(
-                [rows.shape[0] for rows in paired_species_rows[:-1]]
-            )
-            # Ensure n_rows_final is not negative
-            n_rows_final = max(n_rows_final, 0)
-            paired_species_rows[-1] = paired_species_rows[-1][:n_rows_final, :]
             break
 
     if not paired_species_rows:
@@ -1005,8 +950,7 @@ def _num_encode_species(
     return row_to_species
 
 
-def map_to_paired_msa_per_chain(
-    msa_array_collection: MsaArrayCollection,
+def map_to_paired_msa_row_id_per_rep(
     msa_arrays_to_pair: dict[str, MsaArray],
     paired_rows_index: np.ndarray[int],
     species: np.ndarray[str],
@@ -1015,8 +959,6 @@ def map_to_paired_msa_per_chain(
     """Maps paired species indices to MSA rows i.e. seqences.
 
     Args:
-        msa_array_collection (MsaArrayCollection):
-            A collection of Msa objects and chain IDs for a single sample.
         msa_arrays_to_pair (dict[str, MsaArray]):
             Dict mapping chain IDs to Msa objects containing MSA arrays to pair with
             their species information.
@@ -1033,27 +975,14 @@ def map_to_paired_msa_per_chain(
             of large intermediate numpy arrays.
 
     Returns:
-        dict[str, MsaArray]:
-            Dict mapping chain IDs to MsaArrays containing the paired MSAs and paired
-            deletion matrices. Metadata fields are empty.
+        dict[str, np.ndarray[int]]:
+            Dict mapping rep IDs to arrays containing row indices in the original MSAs
+            which species-pair the corresponding rows.
     """
-
-    # Map species indices back to MSA row indices
-    # Pre-allocate MSA objects, including those without pairable MSAs
-    paired_msa_per_chain = {
-        rep_id: MsaArray(
-            msa=np.full((paired_rows_index.shape[0], seq.shape[-1]), "-"),
-            deletion_matrix=np.zeros(
-                (paired_rows_index.shape[0], seq.shape[-1]),
-                dtype=int,
-            ),
-            metadata=pd.DataFrame(),
-        )
-        for rep_id, seq in msa_array_collection.rep_id_to_query_seq.items()
-    }
+    paired_msa_row_ids_per_rep = {}
 
     # For each chain, sort MSA rows by the paired species indices
-    for chain_idx, (chain_id, msa_array) in enumerate(msa_arrays_to_pair.items()):
+    for rep_idx, (rep_id, msa_array) in enumerate(msa_arrays_to_pair.items()):
         # Get the array of species for each aligned sequences to the query chain
         species_array = np.array(msa_array.metadata["species_id"].to_numpy())
 
@@ -1061,7 +990,7 @@ def map_to_paired_msa_per_chain(
         row_to_species = _num_encode_species(species, species_array)
 
         # Get paired species ids for chain
-        paired_row_index_of_chain = paired_rows_index[:, chain_idx]
+        paired_row_index_of_chain = paired_rows_index[:, rep_idx]
 
         if mode == "deque":
             # Build a mapping from species index to deque of MSA row indices
@@ -1105,175 +1034,158 @@ def map_to_paired_msa_per_chain(
                 f"Invalid mode: {mode}. Must be 'deque' or 'outer_product'."
             )
 
-        valid_rows = msa_rows != -1
-        # Update MSA and deletion matrix with paired data
-        paired_msa_per_chain[chain_id].msa[paired_row_index_of_chain != -1] = (
-            msa_array.msa[msa_rows[valid_rows]]
+        paired_msa_row_ids_per_rep[rep_id] = msa_rows
+
+    return paired_msa_row_ids_per_rep
+
+
+def expand_paired_row_ids(
+    msa_array_collection: MsaArrayCollection,
+    paired_msa_row_ids_per_rep: dict[str, np.ndarray[int]],
+    paired_species_ids: np.ndarray[int],
+) -> dict[str, np.ndarray[int]]:
+    """Maps per-rep row IDs to per-chain row IDs."""
+
+    paired_msa_row_ids_per_chain = {}
+    for chain_id, rep_id in msa_array_collection.chain_id_to_rep_id.items():
+        rows = paired_msa_row_ids_per_rep.get(rep_id)
+        if rows is None:
+            rows = np.full(paired_species_ids.shape[0], -1, dtype=int)
+        paired_msa_row_ids_per_chain[chain_id] = rows.copy()
+
+    return paired_msa_row_ids_per_chain
+
+
+def sort_by_row_id_product(
+    paired_msa_row_ids_per_chain: dict[str, np.ndarray[int]],
+    paired_species_ids: np.ndarray[int],
+) -> dict[str, np.ndarray[int]]:
+    """Sorts rows based on the row-products in the original MSAs.
+
+    Args:
+        paired_msa_row_ids_per_chain (dict[str, np.ndarray[int]]):
+            The paired MSA row-indices for each chain.
+
+    Returns:
+        dict[str, np.ndarray[int]]:
+            The SORTED paired MSA row-indices for each chain.
+    """
+
+    # Horizontally stack paired row IDs
+    chain_ids = list(paired_msa_row_ids_per_chain.keys())
+    paired_row_ids_sample = np.concatenate(
+        [paired_msa_row_ids_per_chain[chain_id][..., None] for chain_id in chain_ids],
+        axis=1,
+    )
+
+    n_unpaired = np.sum(paired_row_ids_sample == -1, axis=1)
+    n_unpaired_unique = np.unique(n_unpaired)
+
+    # For each group of rows with exactly n_unpaired_i unpaired chains, sort by the
+    # row-products in the original MSAs
+    for n_unpaired_i in n_unpaired_unique:
+        block_mask = n_unpaired == n_unpaired_i
+        paired_row_id_block = paired_row_ids_sample[block_mask, :]
+        paired_species_id_block = paired_species_ids[block_mask, :]
+        sorting_ids = np.argsort(np.abs(np.prod(paired_row_id_block, axis=1)))
+        paired_row_id_block_sorted = paired_row_id_block[sorting_ids, :]
+        paired_species_id_block_sorted = paired_species_id_block[sorting_ids, :]
+        paired_row_ids_sample[block_mask, :] = paired_row_id_block_sorted
+        paired_species_ids[block_mask, :] = paired_species_id_block_sorted
+
+    # Revert to per-chain dict
+    paired_msa_row_ids_per_chain = {
+        chain_id: paired_row_ids_sample[:, chain_idx]
+        for chain_idx, chain_id in enumerate(chain_ids)
+    }
+    return paired_msa_row_ids_per_chain, paired_species_ids
+
+
+def sort_subsample_paired_row_ids(
+    paired_msa_row_ids_per_chain: dict[str, np.ndarray[int]],
+    paired_species_ids: np.ndarray[int],
+    max_rows_paired: int,
+) -> tuple[dict[str, np.ndarray[int]], np.ndarray[int], int]:
+    """Sorts and subsamples the row ID arrays if necessary."""
+
+    n_rows_actual = next(iter(paired_msa_row_ids_per_chain.values())).shape[0]
+    if n_rows_actual > max_rows_paired:
+        paired_msa_row_ids_per_chain, paired_species_ids = sort_by_row_id_product(
+            paired_msa_row_ids_per_chain, paired_species_ids
         )
-        paired_msa_per_chain[chain_id].deletion_matrix[
-            paired_row_index_of_chain != -1
-        ] = msa_array.deletion_matrix[msa_rows[valid_rows]]
 
-    return paired_msa_per_chain
+        for chain_id, row_ids in paired_msa_row_ids_per_chain.items():
+            paired_msa_row_ids_per_chain[chain_id] = row_ids[:max_rows_paired]
+        paired_species_ids = paired_species_ids[:max_rows_paired, :]
+
+        n_rows_actual = max_rows_paired
+
+    return paired_msa_row_ids_per_chain, paired_species_ids, n_rows_actual
 
 
-def expand_paired_msas(msa_array_collection: MsaArrayCollection) -> dict[int, MsaArray]:
-    """Expands the paired msas and deletion matrices from representatives to chains.
+def map_row_ids_to_msa_arrays(
+    msa_array_collection: MsaArrayCollection,
+    msa_arrays_to_pair: dict[str, MsaArray],
+    paired_species_ids: np.ndarray[int],
+    paired_msa_row_ids_per_chain: dict[str, np.ndarray[int]],
+) -> dict[str, MsaArray]:
+    """Maps paired MSA row indices to MsaArray objects.
 
     Args:
         msa_array_collection (MsaArrayCollection):
             A collection of Msa objects and chain IDs for a single sample.
+        msa_arrays_to_pair (dict[str, MsaArray]):
+            Dict mapping chain IDs to Msa objects containing MSA arrays to pair with
+            their species information.
+        paired_species_ids (np.ndarray[int]):
+            An array containing the indices that pair rows in MSAs of an
+            assembly across chains with -1 at partially paired positions.
+        paired_msa_row_ids_per_chain (dict[str, np.ndarray[int]]):
+            The paired MSA row-indices for each chain.
 
     Returns:
-        dict[int, MsaArray]:
-            Dict of MsaArray objects containing the paired msas and deletion matrix
-            for each chain, indexed by chain id.
+        dict[str, MsaArray]:
+            The paired MSA arrays for each chain.
     """
-    return {
-        k: msa_array_collection.rep_id_to_paired_msa[v]
+    # Pre-allocate MSA objects, including those without pairable MSAs
+    n_rows_actual = next(iter(paired_msa_row_ids_per_chain.values())).shape[0]
+    rep_id_to_paired_msa = {
+        rep_id: MsaArray(
+            msa=np.full((n_rows_actual, seq.shape[-1]), "-"),
+            deletion_matrix=np.zeros(
+                (n_rows_actual, seq.shape[-1]),
+                dtype=int,
+            ),
+            metadata=pd.DataFrame(),
+        )
+        for rep_id, seq in msa_array_collection.rep_id_to_query_seq.items()
+    }
+    chain_id_to_paired_msa = {
+        k: rep_id_to_paired_msa[v]
         for (k, v) in msa_array_collection.chain_id_to_rep_id.items()
     }
 
+    # Map paired row indices to MSA arrays
+    rep_id_to_chain_idx = {
+        rep_id: chain_idx
+        for chain_idx, rep_id in enumerate(list(msa_arrays_to_pair.keys()))
+    }
+    for chain_id, rep_id in msa_array_collection.chain_id_to_rep_id.items():
+        if rep_id not in msa_arrays_to_pair:
+            continue
+        msa_array = msa_arrays_to_pair[rep_id]
+        source_row_ids = paired_msa_row_ids_per_chain[chain_id]
+        valid_souce_rows = source_row_ids != -1
+        valid_target_rows = paired_species_ids[:, rep_id_to_chain_idx[rep_id]] != -1
 
-@log_runtime_memory(runtime_dict_key="runtime-msa-proc-create-paired")
-def create_paired(
-    msa_array_collection: MsaArrayCollection,
-    max_rows_paired: int,
-    min_chains_paired_partial: int,
-    pairing_mask_keys: list[str],
-    max_seq_per_species: int,
-    msas_to_pair: Sequence[str] | None,
-) -> dict[str, MsaArray]:
-    """Creates paired MSA arrays from UniProt MSAs.
-
-    Follows the AF2-Multimer strategy for pairing rows of UniProt MSAs based on species
-    IDs and sequence similarity to the query sequence with added functionality to
-    exclude all partially paired rows with less than a certain number of chains
-    as suggested by the AF3 SI.
-
-    Also crops the paired MSA along its rows to max_rows_paired.
-
-    Args:
-        msa_array_collection (MsaArrayCollection):
-            A collection of Msa objects and chain IDs for a single sample.
-        max_rows_paired (int):
-            The maximum number of rows to keep from the paired rows.
-        min_chains_paired_partial (int):
-            The minimum allowed number of chains to partially pair. Can be at most
-            the number of unique chains in the crop or assembly.
-        pairing_mask_keys (list[str]):
-            List of strings indicating which mask to add.
-        max_seq_per_species (int):
-            Max number of sequences to keep per species from each chain's MSA.
-        msas_to_pair (list[str]):
-            Msas to pair for online pairing
-
-    Returns:
-        dict[str, Msa]:
-            Paired MSAs and deletion matrices for each chain.
-    """
-    # Get parsed uniprot hits
-    msa_arrays_to_pair = extract_alignments_to_pair(msa_array_collection, msas_to_pair)
-
-    # Ensure there are at least two chains with UniProt hits after filtering
-    if len(msa_arrays_to_pair) <= 1:
-        return {}
-
-    # Process uniprot headers and sort by distance to query
-    for chain_id in msa_arrays_to_pair:
-        msa_arrays_to_pair[chain_id].metadata = process_msa_pairing_metadata(
-            msa_arrays_to_pair[chain_id].metadata
-        )
-
-    if max_seq_per_species is not None:
-        for rep_id, msa in msa_arrays_to_pair.items():
-            msa_arrays_to_pair[rep_id] = cap_seqs_per_species(msa, max_seq_per_species)
-
-    # Count species occurrences per chain
-    count_array, species = count_species_per_chain(msa_arrays_to_pair)
-
-    # Get pairing masks
-    pairing_masks = get_pairing_masks(count_array, pairing_mask_keys)
-
-    # No valid pairs, skip MSA pairing
-    if not np.any(pairing_masks):
-        return {}
-
-    # Find species indices that pair rows
-    paired_rows_index = find_pairing_indices(
-        count_array,
-        pairing_masks,
-        max_rows_paired,
-        min_chains_paired_partial,
-    )
-    if paired_rows_index.size == 0:
-        return {}
-
-    # Map species indices back to MSA row indices
-    paired_msa_per_chain = map_to_paired_msa_per_chain(
-        msa_array_collection,
-        msa_arrays_to_pair,
-        paired_rows_index,
-        species,
-    )
-
-    # Expand paired MSAs across all chains
-    msa_array_collection.rep_id_to_paired_msa = paired_msa_per_chain
-    chain_id_to_paired_msa = expand_paired_msas(msa_array_collection)
-
-    # Update row counts
-    msa_array_collection.set_row_counts(
-        n_rows_paired_subsampled=next(iter(chain_id_to_paired_msa.values())).msa.shape[
-            0
+        # Update MSA and deletion matrix with paired data
+        chain_id_to_paired_msa[chain_id].msa[valid_target_rows] = msa_array.msa[
+            source_row_ids[valid_souce_rows]
         ]
-    )
-
-    return chain_id_to_paired_msa
-
-
-# TODO improve integration with existing create paired function
-def create_paired_from_preprocessed(
-    msa_array_collection: MsaArrayCollection,
-    max_rows_paired: int,
-    paired_msa_order: list[str],
-) -> dict[str, MsaArray]:
-    """Creates per-chain paired MSA arrays in the expected format from precomputed
-    paired MSAs.
-
-    Args:
-        msa_array_collection (MsaArrayCollection):
-            A collection of Msa objects and chain IDs for a single sample.
-        max_rows_paired (int):
-            The maximum number of rows to keep from the paired rows.
-        paired_msa_order (list[str]):
-            The order in which to concatenate the paired MSA arrays vertically if
-            multiple are provided. Alignments not in this list are not added to the
-            paired MSA stack.
-
-    Returns:
-        dict[str, MsaArray]: _description_
-    """
-
-    # Process precomputed paired MSAs
-    processed_prepaired_msas = {}
-    for rep_id, paired_msa_dict in msa_array_collection.rep_id_to_paired_msa.items():
-        # Flatten
-        prepaired_msa = MsaArray.multi_concatenate(
-            [
-                paired_msa_dict[paired_msa_key]
-                for paired_msa_key in paired_msa_order
-                if paired_msa_key in paired_msa_dict
-            ]
+        chain_id_to_paired_msa[chain_id].deletion_matrix[valid_target_rows] = (
+            msa_array.deletion_matrix[source_row_ids[valid_souce_rows]]
         )
-        # Crop
-        processed_prepaired_msas[rep_id] = prepaired_msa.truncate(max_rows_paired)
 
-    msa_array_collection.rep_id_to_paired_msa = processed_prepaired_msas
-
-    # Map to per-chain
-    chain_id_to_paired_msa = expand_paired_msas(
-        msa_array_collection=msa_array_collection
-    )
     return chain_id_to_paired_msa
 
 
@@ -1331,158 +1243,3 @@ def calculate_profile(
         col_start = col_end
 
     return counts / n_rows
-
-
-@log_runtime_memory(runtime_dict_key="runtime-msa-proc-create-main")
-def create_main(
-    msa_array_collection: MsaArrayCollection,
-    chain_id_to_paired_msa: dict[str, MsaArray],
-    max_rows: int,
-    aln_order: list[str],
-    subsample_main: bool,
-    keep_subsampled_order: bool,
-    generator: Generator | None = None,
-) -> dict[str, MsaArray]:
-    """Creates main MSA arrays from non-UniProt MSAs.
-
-    Note: this function also removes all sequences from the final main MSA that are
-    present in the cropped paired MSA of the corresponding chain. Also creates the
-    profile and deletion mean from the redundant main MSA before subsampling.
-
-    Args:
-        msa_array_collection (MsaArrayCollection):
-            A collection of MsaArrays and chain IDs for a single sample.
-        chain_id_to_paired_msa (dict[str, MsaArray]):
-            Dict of paired Msa objects per chain.
-        max_rows (int):
-            Maximum number of sequence rows allowed for the MSA vstack of each chain.
-        aln_order (list[str]):
-            The order in which to concatenate the main MSA arrays vertically. Alignments
-            not in this list are not added to the main MSA.
-        subsample_main (bool):
-            Whether to apply per-chain main MSA subsampling.
-        keep_subsampled_order (bool):
-            Whether to keep the order of sequences in the subsampled main MSA relative
-            to the unsubsampled one.
-        generator (Generator | None):
-            Numpy generator for main MSA subsampling.
-
-    Returns:
-        dict[str, MsaArray]:
-            List of MsaArrays containing the main MSA arrays and deletion matrices for
-            each chain.
-    """
-
-    if generator is None:
-        seed = random.randint(0, np.iinfo(np.int32).max)
-        generator = default_rng(seed=seed)
-
-    # Iterate over representatives
-    rep_id_to_main_msa = {}
-    rep_id_to_profile = {}
-    rep_id_to_del_mean = {}
-
-    for rep_id, chain_data in msa_array_collection.rep_id_to_main_msa.items():
-        chain_data = msa_array_collection.rep_id_to_main_msa[rep_id]
-
-        # Get MSAs forming the main MSA and deletion matrices from all non-UniProt MSAs
-        main_msa_redundant = np.concatenate(
-            [chain_data[aln].msa for aln in aln_order if aln in chain_data],
-            axis=0,
-        )
-        main_deletion_matrix_redundant = np.concatenate(
-            [chain_data[aln].deletion_matrix for aln in aln_order if aln in chain_data],
-            axis=0,
-        )
-
-        # Get paired MSAs if any and deduplicate
-        if len(chain_id_to_paired_msa) > 0:
-            # The relevant paired MSA for this representative
-            paired_arr = chain_id_to_paired_msa[
-                msa_array_collection.rep_id_to_chain_id[rep_id]
-            ].msa
-            arr = main_msa_redundant
-
-            # 1) Convert each 2D array into a 1D "structured" view of type void This
-            # way, each row is treated as one item.
-            arr_view = arr.view(np.dtype((np.void, arr.dtype.itemsize * arr.shape[1])))
-            paired_view = paired_arr.view(
-                np.dtype((np.void, paired_arr.dtype.itemsize * paired_arr.shape[1]))
-            )
-
-            # 2) Vectorized membership check: is row in paired_msa? ~np.isin(...)
-            # inverts the boolean array, so True -> "unique" row
-            is_unique = np.squeeze(~np.isin(arr_view, paired_view), axis=-1)
-
-            # Apply filtering with the boolean mask
-            filtered_msa = main_msa_redundant[is_unique, :]
-            filtered_deletion = main_deletion_matrix_redundant[is_unique, :]
-        else:
-            filtered_msa = main_msa_redundant
-            filtered_deletion = main_deletion_matrix_redundant
-
-        # Add to ID-MSA map
-        rep_id_to_main_msa[rep_id] = MsaArray(
-            msa=filtered_msa,
-            deletion_matrix=filtered_deletion,
-            metadata=pd.DataFrame(),
-        )
-
-        # Calculate profile and del mean from the redundant main MSA
-        rep_id_to_profile[rep_id] = calculate_profile(
-            msa_array=main_msa_redundant,
-            molecule_type=msa_array_collection.rep_id_to_mol_type[rep_id],
-            chunk_size=1000,
-        )
-        rep_id_to_del_mean[rep_id] = np.mean(main_deletion_matrix_redundant, axis=0)
-
-    # Reindex dicts from representatives to chain IDs and subsample main MSAs
-    chain_id_to_main_msa = {}
-    chain_id_to_profile = {}
-    chain_id_to_del_mean = {}
-    n_rows_paired_subsampled = msa_array_collection.row_counts.n_rows_paired_subsampled
-    n_rows_main_subsampled = {}
-    max_n_rows_main_subsampled = 0
-    # row upper limit for main MSAs
-    n_rows_main_msa_lim = max(0, max_rows - n_rows_paired_subsampled - 1)
-    for chain_id, rep_id in msa_array_collection.chain_id_to_rep_id.items():
-        filtered_msa_array = rep_id_to_main_msa[rep_id]
-        # actual number of rows in the unsubsampled main MSA for this chain
-        n_rows_main_msa = filtered_msa_array.msa.shape[0]
-
-        if subsample_main:
-            # No main MSA or limit exhausted
-            if n_rows_main_msa == 0 or n_rows_main_msa_lim == 0:
-                idx = np.empty((0,), dtype=int)
-            # Subsample otherwise
-            else:
-                k = generator.integers(1, min(n_rows_main_msa, n_rows_main_msa_lim) + 1)
-                idx = generator.choice(n_rows_main_msa, size=k, replace=False)
-
-            if keep_subsampled_order:
-                idx.sort()
-        else:
-            # Keep up to the limit
-            idx = np.arange(min(n_rows_main_msa, n_rows_main_msa_lim))
-
-        main_msa = MsaArray(
-            msa=filtered_msa_array.msa[idx, :],
-            deletion_matrix=filtered_msa_array.deletion_matrix[idx, :],
-            metadata=pd.DataFrame(),
-        )
-        chain_id_to_main_msa[chain_id] = main_msa
-        chain_id_to_profile[chain_id] = rep_id_to_profile[rep_id]
-        chain_id_to_del_mean[chain_id] = rep_id_to_del_mean[rep_id]
-
-        main_msa_depth = main_msa.msa.shape[0]
-        if main_msa_depth > max_n_rows_main_subsampled:
-            max_n_rows_main_subsampled = main_msa_depth
-        n_rows_main_subsampled[chain_id] = main_msa_depth
-
-    # Update row counts
-    n_rows_total = 1 + n_rows_paired_subsampled + max_n_rows_main_subsampled
-    msa_array_collection.set_row_counts(
-        n_rows_total=n_rows_total,
-        n_rows_main_subsampled=n_rows_main_subsampled,
-    )
-    return chain_id_to_main_msa, chain_id_to_profile, chain_id_to_del_mean
