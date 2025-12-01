@@ -154,6 +154,28 @@ dataset_configs:
             pae: 0.0
             pde: 0.0
 
+    RNA-monomer-distillation:
+      dataset_class: RNAMonomerDataset
+      weight: 0.05
+      config:
+        debug_mode: true
+        crop:
+          token_crop:
+            enabled: true
+            token_budget: 768
+            crop_weights:
+              contiguous: 0.25
+              spatial: 0.75
+              spatial_interface: 0.0
+        loss:
+          loss_weights:
+            bond: 4.0
+            smooth_lddt: 0.0
+            experimentally_resolved: 0.0
+            plddt: 0.0
+            pae: 0.0
+            pde: 0.0
+
   validation:
     val-weighted-pdb:
       dataset_class: ValidationPDBDataset
@@ -178,7 +200,7 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path 
 
   long-monomer-distillation:
@@ -192,7 +214,7 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path 
     use_roda_monomer_format: True
 
@@ -207,7 +229,7 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path 
     use_roda_monomer_format: True
 
@@ -222,8 +244,23 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path
+
+  RNA-monomer-distillation:
+    alignments_directory: none
+    alignment_db_directory: none
+    alignment_array_directory: /path/
+    dataset_cache_file: /path/
+    target_structures_directory: /path
+    target_structure_file_format: npz
+    reference_molecule_directory: /path/
+    template_cache_directory: /path/
+    template_structure_array_directory: /path/
+    template_structures_directory: none
+    template_file_format: npz
+    ccd_file: /path
+    use_roda_monomer_format: True
 
   val-weighted-pdb:
     alignments_directory: none 
@@ -236,5 +273,5 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path

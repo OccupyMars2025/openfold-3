@@ -113,7 +113,7 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path 
 
   val-weighted-pdb:
@@ -127,5 +127,5 @@ dataset_paths:
     template_cache_directory: /path/ 
     template_structure_array_directory: /path/ 
     template_structures_directory: none
-    template_file_format: pkl
+    template_file_format: npz
     ccd_file: /path
