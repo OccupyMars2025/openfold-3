@@ -217,20 +217,17 @@ def sample_templates(
                     chain_data["alignment_representative_id"] + ".npz"
                 )
 
-            template_cache_entry = np.load(
-                template_cache_directory / template_file_name, allow_pickle=True
-            )
+            template_cache_path = template_cache_directory / template_file_name
 
         # From the file path during inference
         else:
-            template_cache_entry = np.load(
-                chain_data["cache_entry_file_path"], allow_pickle=True
-            )
+            template_cache_path = chain_data["cache_entry_file_path"]
 
-        # Unpack into dict
-        template_cache_entry = {
-            key: value.item() for key, value in template_cache_entry.items()
-        }
+        with np.load(template_cache_path, allow_pickle=True) as template_cache_npz:
+            # Unpack into dict
+            template_cache_entry = {
+                key: value.item() for key, value in template_cache_npz.items()
+            }
 
         # Randomly sample k templates (core PDB training sets) or take top k templates
         # (distillation, inference sets)
