@@ -159,6 +159,8 @@ dataset_configs:
       dataset_class: ValidationPDBDataset
       config:
         debug_mode: true
+        msa:
+          subsample_main: false
         template:
           n_templates: 4
           take_top_k: true
