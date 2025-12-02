@@ -72,13 +72,16 @@ def get_mol_id_to_tanimoto_ligands(
     similarity_threshold: float = 0.85,
 ) -> dict[str, set[str]]:
     """
-    Identify ligands in the validation dataset that have high Tanimoto similarity (>=
+    Identify ligands in the validation dataset that have high Tanimoto similarity (>
     similarity_threshold) with any ligand in the training dataset.
 
     Args:
-        val_dataset_cache (ClusteredDatasetCache): Validation dataset cache.
-        train_dataset_cache (ClusteredDatasetCache): Training dataset cache.
-        similarity_threshold (float): Threshold for high homology.
+        val_dataset_cache (ClusteredDatasetCache):
+            Validation dataset cache.
+        train_dataset_cache (ClusteredDatasetCache):
+            Training dataset cache.
+        similarity_threshold (float):
+            Tanimoto similarity above which a ligand is considered homologous.
 
     Returns:
         Dict[str, set[str]]:
@@ -136,7 +139,7 @@ def get_mol_id_to_tanimoto_ligands(
         homolog_train_refids = {
             train_refids[i]
             for i, score in enumerate(similarities)
-            if score >= similarity_threshold
+            if score > similarity_threshold
         }
 
         # Set homologous ligands for this ligand
@@ -152,7 +155,7 @@ def get_mol_id_to_tanimoto_ligands(
 def run_mmseqs_search(
     query_id_to_sequence: dict[str, str],
     target_id_to_sequence: dict[str, str],
-    min_sequence_identity: float = 0.4,
+    seq_identity_threshold: float = 0.4,
     sensitivity: float = 8.0,
     mmseqs_binary: str = "mmseqs",
     dbtype: int = 0,
@@ -166,10 +169,10 @@ def run_mmseqs_search(
             Mapping of query sequence IDs to sequences.
         target_id_to_sequence (Dict[str, str]):
             Mapping of target sequence IDs to sequences.
-        min_sequence_identity (float):
-            Minimum sequence identity for a hit to be considered homologous. Note that
-            this refers to the global sequence identity with respect to the full length
-            of the query sequence.
+        seq_identity_threshold (float):
+            Sequence identity threshold above which a hit is considered homologous. Note
+            that this refers to the global sequence identity with respect to the full
+            length of the query sequence.
         sensitivity (float):
             Sensitivity of the search.
         mmseqs_binary (str):
@@ -221,7 +224,7 @@ def run_mmseqs_search(
         cmd_search = (
             f"{mmseqs_binary} search {db_query} {db_target} {db_result} "
             f"{temp_dir}/tmp -s {sensitivity} --max-seqs {len(target_id_to_sequence)} "
-            f"--search-type {search_type} -c {min_sequence_identity} --cov-mode 2"
+            f"--search-type {search_type} -c {seq_identity_threshold} --cov-mode 2"
         )
         logger.info("Running MMseqs2 search.")
         sp.run(cmd_search, shell=True, check=True)
@@ -254,7 +257,7 @@ def run_mmseqs_search(
         # Global query sequence identity = pident x qcov
         query_sequence_identity = df[2] * df[3]
 
-        high_identity = df[query_sequence_identity > min_sequence_identity]
+        high_identity = df[query_sequence_identity > seq_identity_threshold]
 
         # Group by column 0 (query ID), then collect sets of column 1 (homolog IDs)
         grouped = high_identity.groupby(0)[1].apply(set)
@@ -272,7 +275,7 @@ def get_polymer_chain_to_homolog_chains(
     train_dataset_cache: ClusteredDatasetCache,
     val_id_to_sequence: dict[str, str],
     train_id_to_sequence: dict[str, str],
-    min_sequence_identity: float = 0.4,
+    seq_identity_threshold: float = 0.4,
 ) -> dict[str, set[str]]:
     """Maps protein/nucleic-acid validation chains to homologous training chains.
 
@@ -289,8 +292,10 @@ def get_polymer_chain_to_homolog_chains(
             Mapping of {PDB-ID_chain-ID: sequence} for chains in the validation cache.
         train_id_to_sequence (Dict[str, str]):
             Mapping of {PDB-ID_chain-ID: sequence} for chains in the training cache.
-        min_sequence_identity (float):
-            Minimum sequence identity for a hit to be considered homologous.
+        seq_identity_threshold (float):
+            Sequence identity threshold above which a hit is considered homologous. Note
+            that this refers to the global sequence identity with respect to the full
+            length of the query sequence.
 
     Returns:
         Dict[str, set[str]]:
@@ -332,7 +337,7 @@ def get_polymer_chain_to_homolog_chains(
             run_mmseqs_search(
                 query_id_to_sequence=val_id_to_sequence_mol,
                 target_id_to_sequence=train_id_to_sequence_mol,
-                min_sequence_identity=min_sequence_identity,
+                seq_identity_threshold=seq_identity_threshold,
                 dbtype=db_type,
             )
         )
@@ -351,8 +356,8 @@ def assign_homology_labels(
     """Detects if chains/interfaces are low-homology to the training dataset.
 
     Following AF3 SI 5.8, this function labels chains as low homology if there is no
-    chain in the training set with a sequence identity above a certain threshold for
-    polymer chains, or a Tanimoto similarity above a certain threshold for ligands.
+    chain in the training set with a sequence identity greater than the threshold for
+    polymer chains, or a Tanimoto similarity greater than the threshold for ligands.
 
     Interfaces in the validation dataset are labeled as low homology if there is no PDB
     in the training set that contains homologous chains to both chains in the interface.
@@ -367,9 +372,11 @@ def assign_homology_labels(
         train_id_to_sequence (Dict[str, str]):
             Mapping of {PDB-ID_chain-ID: sequence} for chains in the training cache.
         seq_identity_threshold (float):
-            Minimum sequence identity for a hit to be considered homologous.
+            Sequence identity threshold. Chains with sequence identity strictly greater
+            than this value are considered homologous.
         tanimoto_threshold (float):
-            Minimum Tanimoto similarity for a hit to be considered homologous.
+            Tanimoto similarity threshold. Ligands with Tanimoto similarity strictly
+            greater than this value are considered homologous.
     """
     val_structure_cache = val_dataset_cache.structure_data
     train_structure_cache = train_dataset_cache.structure_data
@@ -404,7 +411,7 @@ def assign_homology_labels(
         train_dataset_cache=train_dataset_cache,
         val_id_to_sequence=val_id_to_sequence,
         train_id_to_sequence=train_id_to_sequence,
-        min_sequence_identity=seq_identity_threshold,
+        seq_identity_threshold=seq_identity_threshold,
     )
 
     # Similarly to earlier, map validation chain IDs to training PDB IDs containing a

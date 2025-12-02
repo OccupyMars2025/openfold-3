@@ -132,13 +132,21 @@ from openfold3.core.data.pipelines.preprocessing.caches.pdb_val import (
     "--seq-identity-threshold",
     type=float,
     default=0.4,
-    help="Sequence identity threshold for homology detection.",
+    help=(
+        "Sequence identity threshold for homology detection. Hits with identity "
+        "strictly greater than this are considered homologous. Note that this refers "
+        "to the global sequence identity with respect to the full length of the query "
+        "sequence."
+    ),
 )
 @click.option(
     "--tanimoto-threshold",
     type=float,
     default=0.85,
-    help="Tanimoto similarity threshold for ligand homology detection.",
+    help=(
+        "Tanimoto similarity threshold for ligand homology detection. Ligands with "
+        "similarity strictly greater than this are considered homologous."
+    ),
 )
 @click.option(
     "--log-level",
