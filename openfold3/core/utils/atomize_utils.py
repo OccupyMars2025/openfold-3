@@ -17,9 +17,11 @@ from typing import Literal
 
 import torch
 
-from openfold3.core.data.resources.residues import STANDARD_PROTEIN_RESIDUES_ORDER
+from openfold3.core.data.resources.residues import (
+    STANDARD_PROTEIN_RESIDUES_ORDER,
+    STANDARD_RESIDUES_WITH_GAP_3,
+)
 from openfold3.core.data.resources.token_atom_constants import (
-    TOKEN_TYPES_WITH_GAP,
     atom_name_to_index_by_restype,
 )
 
@@ -651,18 +653,18 @@ def get_token_representative_atoms(
     is_standard_dna = batch["is_dna"] * (1 - batch["is_atomized"])
     is_standard_rna = batch["is_rna"] * (1 - batch["is_atomized"])
     is_standard_purine = is_standard_dna * (
-        batch["restype"][..., TOKEN_TYPES_WITH_GAP.index("DA")]
-        + batch["restype"][..., TOKEN_TYPES_WITH_GAP.index("DG")]
+        batch["restype"][..., STANDARD_RESIDUES_WITH_GAP_3.index("DA")]
+        + batch["restype"][..., STANDARD_RESIDUES_WITH_GAP_3.index("DG")]
     ) + is_standard_rna * (
-        batch["restype"][..., TOKEN_TYPES_WITH_GAP.index("A")]
-        + batch["restype"][..., TOKEN_TYPES_WITH_GAP.index("G")]
+        batch["restype"][..., STANDARD_RESIDUES_WITH_GAP_3.index("A")]
+        + batch["restype"][..., STANDARD_RESIDUES_WITH_GAP_3.index("G")]
     )
     is_standard_pyrimidine = is_standard_dna * (
-        batch["restype"][..., TOKEN_TYPES_WITH_GAP.index("DC")]
-        + batch["restype"][..., TOKEN_TYPES_WITH_GAP.index("DT")]
+        batch["restype"][..., STANDARD_RESIDUES_WITH_GAP_3.index("DC")]
+        + batch["restype"][..., STANDARD_RESIDUES_WITH_GAP_3.index("DT")]
     ) + is_standard_rna * (
-        batch["restype"][..., TOKEN_TYPES_WITH_GAP.index("C")]
-        + batch["restype"][..., TOKEN_TYPES_WITH_GAP.index("U")]
+        batch["restype"][..., STANDARD_RESIDUES_WITH_GAP_3.index("C")]
+        + batch["restype"][..., STANDARD_RESIDUES_WITH_GAP_3.index("U")]
     )
 
     # Get index of representative atoms

@@ -11,49 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-PROTEIN_RESTYPES = [
-    "ALA",
-    "ARG",
-    "ASN",
-    "ASP",
-    "CYS",
-    "GLN",
-    "GLU",
-    "GLY",
-    "HIS",
-    "ILE",
-    "LEU",
-    "LYS",
-    "MET",
-    "PHE",
-    "PRO",
-    "SER",
-    "THR",
-    "TRP",
-    "TYR",
-    "VAL",
-    "UNK",
-]
-
-RNA_NUCLEOTIDE_TYPES = [
-    "A",
-    "G",
-    "C",
-    "U",
-    "N",
-]
-
-DNA_NUCLEOTIDE_TYPES = [
-    "DA",
-    "DG",
-    "DC",
-    "DT",
-    "DN",
-]
-
-TOKEN_TYPES = PROTEIN_RESTYPES + RNA_NUCLEOTIDE_TYPES + DNA_NUCLEOTIDE_TYPES
-TOKEN_TYPES_WITH_GAP = TOKEN_TYPES + ["GAP"]
+from openfold3.core.data.resources.residues import (
+    STANDARD_RESIDUES_WITH_GAP_3,
+    STANDARD_RNA_RESIDUES,
+)
 
 AA_NAME_TO_ATOM_NAMES = {
     "ALA": ["N", "CA", "C", "O", "CB"],
@@ -148,7 +109,9 @@ NUCLEOTIDE_ATOMS = {
 }
 
 NUCLEOTIDE_NAME_TO_ATOM_NAMES = {
-    n: (RNA_BACKBONE_ATOMS + a if n in RNA_NUCLEOTIDE_TYPES else DNA_BACKBONE_ATOMS + a)
+    n: (
+        RNA_BACKBONE_ATOMS + a if n in STANDARD_RNA_RESIDUES else DNA_BACKBONE_ATOMS + a
+    )
     for n, a in NUCLEOTIDE_ATOMS.items()
 }
 
@@ -166,7 +129,7 @@ def get_atom_name_to_index(atom_name):
     """
     indices = []
     mask = []
-    for name in TOKEN_TYPES_WITH_GAP:
+    for name in STANDARD_RESIDUES_WITH_GAP_3:
         try:
             indices.append(TOKEN_NAME_TO_ATOM_NAMES[name].index(atom_name))
             mask.append(1)
