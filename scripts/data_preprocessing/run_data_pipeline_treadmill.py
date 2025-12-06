@@ -348,6 +348,11 @@ def main(
     Returns:
         None
     """
+    if save_features == "False":
+        save_features = False
+    if save_atom_array == "False":
+        save_atom_array = False
+
     # Set seed
     pl.seed_everything(seed, workers=False)
 
