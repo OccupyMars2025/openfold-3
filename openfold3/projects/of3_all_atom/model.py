@@ -356,10 +356,11 @@ class OpenFold3(nn.Module):
 
         # Determine whether to use zij trunk embedding in confidence heads
         # Only enabled during training
-        if self.training:
-            use_trunk_embedding = random.random() < self.shared.use_confidence_emb_prob
-        else:
-            use_trunk_embedding = True
+        use_trunk_embedding = (
+            random.random() < self.shared.use_confidence_emb_prob
+            if self.training
+            else True
+        )
 
         # Compute atom positions
         with (
