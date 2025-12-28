@@ -454,7 +454,8 @@ def create_template_cache_for_query(
             continue
 
         # 1. Apply sequence filters: AF3 SI Section 2.4
-        if check_sequence(query_seq=query.hit_sequence.replace("-", ""), hit=hit):
+        fails_sequence_filters, _, _ = check_sequence(query=query, hit=hit)
+        if fails_sequence_filters:
             template_process_logger.info(
                 f"Template {hit_pdb_id} sequence does not pass sequence"
                 " filters. Skipping this template."

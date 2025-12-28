@@ -143,7 +143,7 @@ def parse_representatives(
 
 # Template cache construction
 def check_sequence(
-    query_seq: str,
+    query: TemplateHit,
     hit: TemplateHit,
     max_subseq: float = 0.95,
     min_align: float = 0.1,
@@ -152,8 +152,8 @@ def check_sequence(
     """Applies sequence filters to template hits following AF3 SI Section 2.4.
 
     Args:
-        query_seq (str):
-            The query sequence.
+        query (TemplateHit):
+            The query template_hit.
         hit (TemplateHit):
             Candidate template hit.
         max_subseq (float, optional):
@@ -167,12 +167,31 @@ def check_sequence(
         bool:
             Whether the hit passes the sequence filters.
     """
+    query_seq = query.hit_sequence.replace("-", "")
     hit_seq = hit.hit_sequence.replace("-", "")
-    return (
-        ((len(hit_seq) / len(query_seq)) > max_subseq)
-        | ((hit.aligned_cols / len(query_seq)) < min_align)
-        | (len(hit_seq) < min_len)
+    if len(hit_seq) < min_len:
+        return True, None, None
+    query_aln = np.frombuffer(
+        query.hit_sequence.replace(".", "-").encode("ascii"), dtype="S1"
     )
+    hit_aln = np.frombuffer(
+        hit.hit_sequence.replace(".", "-").encode("ascii"), dtype="S1"
+    )
+
+    query_not_gap = query_aln != b"-"
+    hit_not_gap = hit_aln != b"-"
+
+    columns_to_keep = query_not_gap & hit_not_gap
+    covered = columns_to_keep.sum()
+
+    coverage = covered / (len(query_seq) or 1)
+
+    if coverage < min_align:
+        return True, None, None
+
+    identical = (columns_to_keep & (query_not_gap == hit_not_gap)).sum()
+
+    return coverage >= max_subseq and identical == covered, query_aln, hit_aln
 
 
 def parse_release_date(cif_file: CIFFile) -> datetime:
