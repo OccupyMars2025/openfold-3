@@ -72,7 +72,6 @@ from openfold3.core.data.tools.colabfold_msa_server import (
 from openfold3.core.utils.tensor_utils import dict_multimap
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 
 class DatasetMode(enum.Enum):
