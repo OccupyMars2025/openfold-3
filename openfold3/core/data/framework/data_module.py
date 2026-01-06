@@ -489,8 +489,10 @@ class DataModule(pl.LightningDataModule):
         return self.generate_dataloader(DatasetMode.prediction)
 
     def state_dict(self):
-        state = {"next_dataset_indices": self.next_dataset_indices,
-                 "next_epoch": self.current_epoch + 1}
+        state = {
+            "next_dataset_indices": self.next_dataset_indices,
+            "next_epoch": self.current_epoch + 1,
+        }
         logger.debug(f"Saving DataModule state dict: {state}")
         return state
 

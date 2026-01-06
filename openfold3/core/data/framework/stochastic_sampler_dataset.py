@@ -56,6 +56,7 @@ from openfold3.core.data.framework.single_datasets.abstract_single import Single
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+
 class SamplerDataset(Dataset):
     """
     A dataset class for combining multiple SingleDataset instances.
@@ -292,10 +293,12 @@ class OF3DistributedSampler(DistributedSampler):
         # Use those indices to pick the correct tuples from the global list
         indices_for_this_rank = list(super().__iter__())
 
-        logger.debug(f"CALLED OF3DistributedSampler.__iter__ in rank {self.rank}: "
-        f"epoch {self.epoch}, seed {self.seed + self.epoch}, sampled dataset indices "
-        f"{dataset_indices.tolist()}, sampled datapoint indices "
-        f"{datapoint_indices.tolist()}, indices_for_this_rank {indices_for_this_rank}")
+        logger.debug(
+            f"CALLED OF3DistributedSampler.__iter__ in rank {self.rank}: "
+            f"epoch {self.epoch}, seed {self.seed + self.epoch}, sampled dataset indices "
+            f"{dataset_indices.tolist()}, sampled datapoint indices "
+            f"{datapoint_indices.tolist()}, indices_for_this_rank {indices_for_this_rank}"
+        )
 
         for i in indices_for_this_rank:
             dataset_idx, datapoint_idx = global_pairs[i]
