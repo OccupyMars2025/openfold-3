@@ -233,6 +233,7 @@ model_config = mlc.ConfigDict(
                     "tri_mul_first": True,
                     "fuse_projection_weights": False,
                     "blocks_per_ckpt": blocks_per_ckpt,
+                    "ckpt_per_template": False,
                     "inf": inf,
                     "linear_init_params": lin_init.pair_block_init,
                     "use_reentrant": False,

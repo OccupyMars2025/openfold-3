@@ -45,9 +45,9 @@ model_update:
       shared: 
         diffusion:
           no_samples: 32
-      loss_module:
-        diffusion:
-          chunk_size: 2
+      template:
+        template_pair_stack:
+          ckpt_per_template: true
 
 dataset_configs:
   train:
