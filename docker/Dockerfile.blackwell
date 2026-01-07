@@ -1,5 +1,5 @@
 # Simple OpenFold3 Dockerfile using NVIDIA PyTorch container
-FROM nvcr.io/nvidia/pytorch:25.02-py3
+FROM nvcr.io/nvidia/pytorch:25.12-py3
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -13,15 +13,21 @@ RUN apt-get update && apt-get install -y \
     libxft2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone OpenFold3 source and modify environment file
+# Install CUTLASS for DeepSpeed Evoformer attention kernel
+# We need only the headers for DeepSpeed JIT, don't need the pip package with bindings
 WORKDIR /opt
-RUN git clone https://github.com/aqlaboratory/openfold-3.git && \
-    cd openfold-3 && \
-    cp -p environments/production-linux-64.yml environments/production.yml.backup && \
-    grep -v "pytorch::pytorch" environments/production.yml > environments/production.yml.tmp && \
-    mv environments/production.yml.tmp environments/production.yml
+RUN git clone https://github.com/NVIDIA/cutlass --branch v3.6.0 --depth 1
 
-WORKDIR /opt/openfold-3
+# Pre-compile DeepSpeed operations for Blackwell GPUs to avoid runtime compilation
+# Create necessary cache directories
+RUN python3 -c "import os; os.makedirs('/root/.triton/autotune', exist_ok=True)"
+
+# Set environment variables including CUDA architecture for Blackwell
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    KMP_AFFINITY=none \
+    CUTLASS_PATH=/opt/cutlass \
+    TORCH_CUDA_ARCH_LIST="12.1"
 
 # Install Python dependencies
 RUN pip install --no-cache-dir \
@@ -46,36 +52,18 @@ RUN pip install --no-cache-dir \
     awscli \
     memory_profiler \
     func_timeout \
-    biotite==1.2.0 \
-    "nvidia-cutlass<4" \
-    "cuda-python<12.9.1"
+    biotite==1.2.0
 
-# Install CUTLASS for DeepSpeed Evoformer attention kernel
-WORKDIR /opt
-RUN git clone https://github.com/NVIDIA/cutlass --branch v3.6.0 --depth 1
+COPY pyproject.toml /opt/openfold3/
+COPY openfold3/__init__.py /opt/openfold3/openfold3/
+COPY scripts/ /opt/openfold3/scripts/
 
 # Install OpenFold3 package itself (provides run_openfold command)
-WORKDIR /opt/openfold-3
-RUN python3 -m pip install --editable --no-deps .
+WORKDIR /opt/openfold3
+RUN python3 -m pip install --no-deps --editable .
 
-# Set environment variables including CUDA architecture for Blackwell
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    KMP_AFFINITY=none \
-    CUTLASS_PATH=/opt/cutlass \
-    TORCH_CUDA_ARCH_LIST="12.0"
-
-# Pre-compile DeepSpeed operations for Blackwell GPUs to avoid runtime compilation
-# Create necessary cache directories
-RUN python3 -c "import os; os.makedirs('/root/.triton/autotune', exist_ok=True)"
-
-# Create a Python sitecustomize.py to set TORCH_CUDA_ARCH_LIST before any imports
-# This ensures the variable is set before PyTorch's cpp_extension checks it
-RUN mkdir -p /usr/local/lib/python3.12/site-packages && \
-    echo 'import os' > /usr/local/lib/python3.12/site-packages/sitecustomize.py && \
-    echo 'os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "12.0")' >> /usr/local/lib/python3.12/site-packages/sitecustomize.py && \
-    echo 'os.environ.setdefault("CUTLASS_PATH", "/opt/cutlass")' >> /usr/local/lib/python3.12/site-packages/sitecustomize.py && \
-    echo 'os.environ.setdefault("KMP_AFFINITY", "none")' >> /usr/local/lib/python3.12/site-packages/sitecustomize.py
+# Copy the entire source tree directly (at the very end for optimal caching)
+COPY . /opt/openfold3
 
 # Default command
 CMD ["/bin/bash"]
