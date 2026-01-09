@@ -222,6 +222,8 @@ class TemplatePairBlock(PairBlock):
             t_in = single_templates[i]
             mask_in = single_templates_masks[i]
 
+            # Make contiguous to avoid activation checkpointing on a views of tensors
+            # If inplace_safe is true (inference), avoid making a copy of the tensor
             if not inplace_safe and apply_ckpt:
                 t_in = t_in.contiguous()
                 mask_in = mask_in.contiguous()
@@ -234,6 +236,8 @@ class TemplatePairBlock(PairBlock):
             )
 
             if inplace_safe:
+                # t_in is the view into t at index i
+                # Copy here to safely update t if t_out has any non-inplace updates
                 t_in.copy_(t_out)
             else:
                 single_templates[i] = t_out
