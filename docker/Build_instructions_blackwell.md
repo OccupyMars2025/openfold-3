@@ -38,7 +38,7 @@ docker run \
     -v $(pwd)/output:/output \
     -w /output openfold-3-blackwell:latest \
     run_openfold predict \
-    --query_json=/opt/openfold3/examples/example_inference_inputs/query_ubiquitin.json \
+    --query_json=examples/example_inference_inputs/query_ubiquitin.json \
     --num_diffusion_samples=1 \
     --num_model_seeds=1 \
     --use_templates=false 

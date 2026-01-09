@@ -1,0 +1,54 @@
+# Blackwell (sm_121) on aarch64 environment
+name: openfold3-env
+variables:
+  CUDA_HOME: /usr/local/cuda
+  PATH: /usr/local/cuda/bin:${PATH}
+  LD_LIBRARY_PATH: /usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+  # Triton bundles its own ptaxs which does not support sm_121
+  # This forces Triton to use the system ptaxas compiler, aware of sm_121
+  TRITON_PTXAS_PATH: /usr/local/cuda/bin/ptxas
+  # Requires: git clone https://github.com/NVIDIA/cutlass --branch v3.6.0 --depth 1 ~/workspace/cutlass
+  CUTLASS_PATH: /home/jandom/workspace/cutlass
+  # Note: OMP_NUM_THREADS=1 is required to avoid threading conflicts
+  OMP_NUM_THREADS: "1"
+
+channels:
+  - conda-forge
+  - bioconda
+  - nvidia
+dependencies:
+  - python
+  - awscli
+  - setuptools
+  - pip
+  - conda-forge::uv
+  - pytorch-lightning
+  - biopython
+  - numpy
+  - pandas
+  - PyYAML
+  - requests
+  - scipy
+  - tqdm
+  - typing-extensions
+  - wandb
+  - modelcif
+  - ml-collections
+  - rdkit=2025.09.3
+  - mmseqs2
+  - bioconda::hmmer
+  - bioconda::hhsuite
+  - bioconda::kalign2
+  - bioconda::snakemake
+  - memory_profiler
+  - func_timeout
+  - boto3
+  - conda-forge::python-lmdb=1.6
+  - conda-forge::ijson
+  - pip:
+      # PyTorch stable cu130 for aarch64 - works on Blackwell via PTX JIT
+      - --extra-index-url https://download.pytorch.org/whl/cu130
+      - torch>=2.9.0
+      - biotite==1.2.0
+      - deepspeed
+      - pdbeccdutils
