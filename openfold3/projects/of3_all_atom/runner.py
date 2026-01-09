@@ -60,7 +60,7 @@ if deepspeed_is_installed:
     import deepspeed
 
 logger = logging.getLogger(__name__)
-
+logger.setLevel(logging.INFO)
 # We define extra metrics that will cause this warning depending on the training stage
 # Only metrics with values present are logged, so we can ignore this error
 warnings.filterwarnings(
@@ -781,10 +781,41 @@ class OpenFold3AllAtom(ModelRunner):
                 step=self.global_step - 1,
             )
 
+    def _get_train_sampler(self):
+        dl = self.trainer.train_dataloader
+        # If PL uses multiple loaders, dl can be CombinedLoader etc.
+        # Handle the simple/common case first:
+        sampler = getattr(dl, "sampler", None)
+
+        # If it's a BatchSampler, the underlying sampler is sampler.sampler
+        if sampler is not None and hasattr(sampler, "sampler"):
+            # only unwrap if it looks like a BatchSampler wrapper
+            # (BatchSampler has .sampler and .batch_size, .drop_last)
+            if hasattr(sampler, "batch_size") and hasattr(sampler, "drop_last"):
+                sampler = sampler.sampler
+        return sampler
+
+    def on_train_epoch_start(self):
+        sampler = self._get_train_sampler()
+
+        logger.info(
+            f"Rank - {self.global_rank} starting epoch {self.trainer.current_epoch} "
+            f"sampler epoch: {sampler.epoch} "
+            f"global_step={self.trainer.global_step} "
+            f"next_dataset_indices={self.trainer.datamodule.next_dataset_indices}"
+        )
+
     def on_train_epoch_end(self):
         """Log aggregated epoch metrics for training."""
         self._log_epoch_metrics(metrics=self.train_losses)
         self._log_epoch_metrics(metrics=self.train_metrics)
+        sampler = self._get_train_sampler()
+        logger.info(
+            f"Rank - {self.global_rank} finished epoch {self.trainer.current_epoch} "
+            f"sampler epoch: {sampler.epoch} "
+            f"global_step={self.trainer.global_step} "
+            f"next_dataset_indices={self.trainer.datamodule.next_dataset_indices}"
+        )
 
     def on_validation_epoch_end(self):
         """Log aggregated epoch metrics for validation."""

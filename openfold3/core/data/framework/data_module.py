@@ -72,7 +72,7 @@ from openfold3.core.data.tools.colabfold_msa_server import (
 from openfold3.core.utils.tensor_utils import dict_multimap
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 class DatasetMode(enum.Enum):
@@ -162,6 +162,7 @@ class DataModule(pl.LightningDataModule):
     """A LightningDataModule class for organizing Datasets and DataLoaders."""
 
     def __init__(self, data_module_config: DataModuleConfig) -> None:
+        logger.debug("---- Called DataModule.__init__()")
         super().__init__()
 
         # Possibly initialize directly from DataModuleConfig
@@ -171,7 +172,10 @@ class DataModule(pl.LightningDataModule):
         self.data_seed = data_module_config.data_seed
         self.epoch_len = data_module_config.epoch_len
         self.next_dataset_indices = {}
+        # next_epoch is None to start with in the 1st epoch
         self.next_epoch = None
+        logger.debug(f"Seeding DataModule generator with {self.data_seed}")
+        self.generator = torch.Generator().manual_seed(self.data_seed)
 
         # Parse datasets
         self.multi_dataset_config = self.parse_data_config(data_module_config.datasets)
@@ -184,8 +188,7 @@ class DataModule(pl.LightningDataModule):
                 self.next_dataset_indices[cfg.name] = 0
 
     def setup(self, stage=None):
-        self.generator = torch.Generator().manual_seed(self.data_seed)
-        logger.info(f"[rank: {self.global_rank}] Data seed set to {self.data_seed}")
+        logger.debug("---- Called DataModule.setup()")
 
         self.datasets_by_mode = {k: [] for k in DatasetMode}
 
@@ -347,21 +350,24 @@ class DataModule(pl.LightningDataModule):
             )
 
     @property
-    def current_epoch(self):
-        # Get current epoch
-        return self.trainer.current_epoch if self.trainer is not None else 0
-
-    @property
     def global_rank(self):
         # Get global rank
         # Not necessary when running in isolation from pl.Trainer (i.e. unit tests)
-        return self.trainer.global_rank if self.trainer is not None else None
+        if self.trainer is not None:
+            return self.trainer.global_rank
+        if dist.is_available():
+            return dist.get_rank()
+        return 0
 
     @property
     def world_size(self):
         # Get world size
         # Not necessary when running in isolation from pl.Trainer (i.e. unit tests)
-        return self.trainer.world_size if self.trainer is not None else None
+        if self.trainer is not None:
+            return self.trainer.world_size
+        if dist.is_available():
+            return dist.get_world_size()
+        return 1
 
     def init_datasets(
         self, multi_dataset_config: MultiDatasetConfig, set_world_size: bool = False
@@ -439,6 +445,7 @@ class DataModule(pl.LightningDataModule):
         Returns:
             DataLoader: training dataloader.
         """
+        logger.debug("---- Called DataModule.train_dataloader()")
         train_dataset = self.datasets_by_mode[DatasetMode.train]
         train_data_probs = self.multi_dataset_config.get_config_for_mode(
             DatasetMode.train
@@ -455,12 +462,10 @@ class DataModule(pl.LightningDataModule):
             seed=self.data_seed,
         )
 
-        # Need to set sampler epoch to the next when resuming training
+        # next_epoch is not None starting from the 2nd epoch and in all epochs when restarting
+        # from a checkpoint
         if self.next_epoch is not None:
             sampler.set_epoch(self.next_epoch)
-        # Otherwise current epoch, which should be 0 when starting from scratch
-        else:
-            sampler.set_epoch(self.current_epoch)
 
         return self.generate_dataloader(DatasetMode.train, sampler=sampler)
 
@@ -491,12 +496,30 @@ class DataModule(pl.LightningDataModule):
     def state_dict(self):
         state = {
             "next_dataset_indices": self.next_dataset_indices,
-            "next_epoch": self.current_epoch + 1,
+            "next_epoch": self.trainer.current_epoch + 1 if self.trainer is not None else 1,
         }
         logger.debug(f"Saving DataModule state dict: {state}")
         return state
 
     def load_state_dict(self, state_dict: dict[str, Any]):
+        """Loads the state dict into the DataModule.
+        
+        Hook order when resuming is:
+        1. DataModule.__init__
+        2. DataModule.setup
+        3. DataModule.load_state_dict
+        4. DataModule.train_dataloader
+        so this sets next_epoch correctly for the first epoch after resuming 
+        for seeding the DistributedSampler.
+        """
+        logger.debug(f"Loading DataModule state dict: {state_dict}")
+
+        self.next_epoch = state_dict.get("next_epoch", 0)
+        next_data_seed = self.data_seed + self.next_epoch
+        logger.debug(f"Seeding DataModule generator with {next_data_seed}")
+        self.generator = torch.Generator().manual_seed(next_data_seed)
+
+        # Return if no in-order sampling datasets are used (FT3)
         if not self.next_dataset_indices:
             return
 
@@ -508,10 +531,7 @@ class DataModule(pl.LightningDataModule):
                 "current configuration and checkpoint."
                 f"Current {current_index_keys} Checkpoint {loaded_index_keys}"
             )
-        self.next_dataset_indices = state_dict["next_dataset_indices"]
-        self.next_epoch = state_dict["next_epoch"]
-
-        logger.debug(f"Loaded DataModule state dict: {state_dict}")
+        self.next_dataset_indices = state_dict["next_dataset_indices"]        
 
 
 class InferenceDataModule(DataModule):

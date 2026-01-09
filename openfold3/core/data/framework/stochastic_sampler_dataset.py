@@ -54,8 +54,7 @@ from torch.utils.data.distributed import DistributedSampler
 from openfold3.core.data.framework.single_datasets.abstract_single import SingleDataset
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
+logger.setLevel(logging.DEBUG)
 
 class SamplerDataset(Dataset):
     """
@@ -128,8 +127,8 @@ class OF3DistributedSampler(DistributedSampler):
         self,
         dataset: SamplerDataset,
         dataset_probabilities: Sequence[float],
-        epoch_len: int,
         next_dataset_indices: dict[str, Any],
+        epoch_len: int,
         num_replicas: int | None = None,
         rank: int | None = None,
         seed: int = 0,
@@ -146,6 +145,11 @@ class OF3DistributedSampler(DistributedSampler):
                 Number of datapoints to sample in total for each virtual epoch.
             next_dataset_indices: dict[str, Any]
                 Record of last used indices for datasets that use in-order sampling
+            epoch_len (int):
+                Number of datapoints to sample in total for each virtual epoch.
+            epoch_fetcher (Callable[[], int] | None):
+                Optional callable that returns the current epoch number. If provided,
+                this will be used to set the epoch instead of the internal epoch counter.
             num_replicas:
                 Number of processes participating in distributed training
             rank:
@@ -153,6 +157,7 @@ class OF3DistributedSampler(DistributedSampler):
             seed:
                 Random seed used to shuffle the sampler if shuffle=True
         """
+        logger.debug(f"Rank {rank} - Initializing OF3DistributedSampler with {dataset_probabilities=}, {next_dataset_indices=}, {epoch_len=}, {seed=}")
         super().__init__(
             dataset,
             num_replicas=num_replicas,
@@ -215,6 +220,8 @@ class OF3DistributedSampler(DistributedSampler):
             slice_indices = torch.concat((slice_indices, torch.arange(0, end_idx)))
 
         self.next_dataset_indices[dataset.name] = end_idx
+
+        logger.debug(f"Fetching ordered subset for epoch {self.epoch} {dataset.name}: start={start_idx}, n={num_examples}, end={end_idx}")
 
         return slice_indices
 
@@ -294,7 +301,7 @@ class OF3DistributedSampler(DistributedSampler):
         indices_for_this_rank = list(super().__iter__())
 
         logger.debug(
-            f"CALLED OF3DistributedSampler.__iter__ in rank {self.rank}: "
+            f"---- Called OF3DistributedSampler.__iter__ in rank {self.rank}: "
             f"epoch {self.epoch}, seed {self.seed + self.epoch}, sampled dataset "
             f"indices {dataset_indices.tolist()}, sampled datapoint indices "
             f"{datapoint_indices.tolist()}, indices_for_this_rank "
