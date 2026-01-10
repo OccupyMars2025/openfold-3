@@ -186,7 +186,6 @@ class DataModule(pl.LightningDataModule):
                 self.next_dataset_indices[cfg.name] = 0
 
     def setup(self, stage=None):
-
         self.datasets_by_mode = {k: [] for k in DatasetMode}
 
         # Initialize datasets
@@ -433,7 +432,8 @@ class DataModule(pl.LightningDataModule):
         # passed explicitly here.
         worker_init_fn = partial(pl_worker_init_function, rank=self.global_rank)
         logger.debug(
-            f"Creating {mode} dataloader: num_workers={num_workers}, rank={self.global_rank}."
+            f"Creating {mode} dataloader: num_workers={num_workers}, "
+            f"rank={self.global_rank}."
         )
         return DataLoader(
             dataset=self.datasets_by_mode[mode],
@@ -467,8 +467,8 @@ class DataModule(pl.LightningDataModule):
             seed=self.data_seed,
         )
 
-        # next_epoch is not None starting from the 2nd epoch and in all epochs when restarting
-        # from a checkpoint
+        # next_epoch is not None starting from the 2nd epoch and in all epochs
+        # when restarting from a checkpoint
         if self.next_epoch is not None:
             sampler.set_epoch(self.next_epoch)
 

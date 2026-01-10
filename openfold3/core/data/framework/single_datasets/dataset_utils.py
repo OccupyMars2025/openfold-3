@@ -13,14 +13,14 @@
 # limitations under the License.
 
 import copy
-from itertools import cycle, islice
 import logging
 import os
+from itertools import cycle, islice
 
 import pandas as pd
 import torch
-from torch.utils.data import get_worker_info
 import torch.distributed as dist
+from torch.utils.data import get_worker_info
 
 from openfold3.core.data.framework.data_module import openfold_batch_collator
 from openfold3.core.utils.atomize_utils import broadcast_token_feat_to_atoms

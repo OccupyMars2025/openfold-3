@@ -55,6 +55,7 @@ from openfold3.core.data.framework.single_datasets.abstract_single import Single
 
 logger = logging.getLogger(__name__)
 
+
 class SamplerDataset(Dataset):
     """
     A dataset class for combining multiple SingleDataset instances.
@@ -143,12 +144,14 @@ class OF3DistributedSampler(DistributedSampler):
             epoch_len (int):
                 Number of datapoints to sample in total for each virtual epoch.
             next_dataset_indices: dict[str, Any]
-                Record of last used indices for datasets that use in-order sampling
+                Record of last used indices for datasets that use in-order
+                sampling
             epoch_len (int):
                 Number of datapoints to sample in total for each virtual epoch.
             epoch_fetcher (Callable[[], int] | None):
-                Optional callable that returns the current epoch number. If provided,
-                this will be used to set the epoch instead of the internal epoch counter.
+                Optional callable that returns the current epoch number. If
+                provided, this will be used to set the epoch instead of the
+                internal epoch counter.
             num_replicas:
                 Number of processes participating in distributed training
             rank:
@@ -156,7 +159,10 @@ class OF3DistributedSampler(DistributedSampler):
             seed:
                 Random seed used to shuffle the sampler if shuffle=True
         """
-        logger.debug(f"Rank {rank} - Initializing OF3DistributedSampler with {dataset_probabilities=}, {next_dataset_indices=}, {epoch_len=}, {seed=}")
+        logger.debug(
+            f"Rank {rank} - Initializing OF3DistributedSampler with "
+            f"{dataset_probabilities=}, {next_dataset_indices=}, {epoch_len=}, {seed=}"
+        )
         super().__init__(
             dataset,
             num_replicas=num_replicas,
@@ -220,7 +226,10 @@ class OF3DistributedSampler(DistributedSampler):
 
         self.next_dataset_indices[dataset.name] = end_idx
 
-        logger.debug(f"Fetching ordered subset for epoch {self.epoch} {dataset.name}: start={start_idx}, n={num_examples}, end={end_idx}")
+        logger.debug(
+            f"Fetching ordered subset for epoch {self.epoch} {dataset.name}: "
+            f"start={start_idx}, n={num_examples}, end={end_idx}"
+        )
 
         return slice_indices
 

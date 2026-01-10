@@ -140,18 +140,6 @@ class DataModuleArgs(BaseModel):
 
     prefetch_factor: int | None = None
 
-    @model_validator(mode="after")
-    def validate_prefetch_settings(self):
-        if self.prefetch_factor is not None:
-            if self.prefetch_factor > 1:
-                raise ValueError("prefetch_factor > 1 is not allowed.")
-            if self.num_workers == 0:
-                raise ValueError(
-                    "prefetch_factor is set but num_workers == 0. Either set "
-                    "num_workers > 0 or remove prefetch_factor."
-                )
-        return self
-
 
 class PlTrainerArgs(BaseModel):
     """Arguments to configure pl.Trainer, including settings for number of devices."""
@@ -179,11 +167,12 @@ class PlTrainerArgs(BaseModel):
 
     @model_validator(mode="after")
     def validate_distributed_sampler_settings(self):
-        world_size = int(self.devices) * int(self.num_nodes)
-        if world_size > 1 and self.use_distributed_sampler is False:
-            raise ValueError(
-                "pl_trainer_args.use_distributed_sampler=False is not allowed "
-                "when devices * num_nodes > 1."
+        if self.use_distributed_sampler is False:
+            warnings.warn(
+                "pl_trainer_args.use_distributed_sampler is set to False. "
+                "Note that this arg is currently being ignored as we always use "
+                "the OF3DistributedSampler.",
+                stacklevel=2,
             )
         return self
 

@@ -788,11 +788,14 @@ class OpenFold3AllAtom(ModelRunner):
         sampler = getattr(dl, "sampler", None)
 
         # If it's a BatchSampler, the underlying sampler is sampler.sampler
-        if sampler is not None and hasattr(sampler, "sampler"):
+        if (
+            sampler is not None
+            and hasattr(sampler, "sampler")
+            and (hasattr(sampler, "batch_size") and hasattr(sampler, "drop_last"))
+        ):
             # only unwrap if it looks like a BatchSampler wrapper
             # (BatchSampler has .sampler and .batch_size, .drop_last)
-            if hasattr(sampler, "batch_size") and hasattr(sampler, "drop_last"):
-                sampler = sampler.sampler
+            sampler = sampler.sampler
         return sampler
 
     def on_train_epoch_start(self):
