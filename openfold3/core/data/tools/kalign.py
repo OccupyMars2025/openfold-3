@@ -13,8 +13,8 @@
 # limitations under the License.
 
 import shutil
-import tempfile
 import subprocess
+import tempfile
 from functools import lru_cache
 
 
