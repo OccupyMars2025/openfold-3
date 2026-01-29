@@ -37,22 +37,23 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 
-def setup_conda_commands():
-    """Check if running in a conda environment."""
-    logger.info("Setting up conda shell environment...")
-
-    if not os.environ.get("CONDA_PREFIX"):
-        logger.error("Error: This script must be run from within a conda environment.")
-        logger.error("Please activate your conda environment first:")
-        logger.error("  conda activate your_env_name")
-        sys.exit(1)
-
-    logger.info(
+def check_conda_use() -> bool:
+    """Check the current environment and return environment info."""
+    logger.info("Checking environment...")
+    
+    use_conda = bool(os.environ.get("CONDA_PREFIX"))
+    if use_conda:
+        logger.info(
         f"Running in conda environment: {os.path.basename(os.environ['CONDA_PREFIX'])}"
     )
+    else:
+        logger.info("Not running in a conda environment.")
+        logger.info("The script will run without conda-specific features.")
+    
+    return use_conda 
 
 
-def setup_openfold_cache() -> tuple[Path, Path]:
+def setup_openfold_cache(use_conda) -> tuple[Path, Path]:
     """Set up the OpenFold cache directory."""
     logger.info("Setting up OpenFold cache directory...")
 
@@ -73,29 +74,34 @@ def setup_openfold_cache() -> tuple[Path, Path]:
     os.environ["OPENFOLD_CACHE"] = str(openfold_cache)
 
     # Set conda environment variable
-    try:
-        subprocess.run(
-            [
-                "conda",
-                "env",
-                "config",
-                "vars",
-                "set",
-                f"OPENFOLD_CACHE={openfold_cache}",
-            ],
-            check=True,
-            capture_output=True,
-        )
-        logger.info(f"OPENFOLD_CACHE set to: {openfold_cache}")
-        logger.info(
-            "Variable will persist when you reactivate: "
-            f"conda activate {os.path.basename(os.environ['CONDA_PREFIX'])}"
-        )
-    except subprocess.CalledProcessError:
-        logger.warning(
-            "Warning: Could not set OPENFOLD_CACHE in conda environment config"
-        )
-        logger.warning("Variable is set for current session only")
+    if use_conda:
+        try:
+            subprocess.run(
+                [
+                    "conda",
+                    "env",
+                    "config",
+                    "vars",
+                    "set",
+                    f"OPENFOLD_CACHE={openfold_cache}",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            logger.info(f"OPENFOLD_CACHE set to: {openfold_cache}")
+            logger.info(
+                "Variable will persist when you reactivate: "
+                f"conda activate {os.path.basename(os.environ['CONDA_PREFIX'])}"
+            )
+        except subprocess.CalledProcessError:
+            logger.warning(
+                "Warning: Could not set OPENFOLD_CACHE in conda environment config"
+            )
+            logger.warning("Variable is set for current session only")
+    else:
+        logger.info("OPENFOLD_CACHE environment variable is set for current session only")
+        logger.info("If not using the default directory, please save "
+                    f"`export $OPENFOLD_CACHE={openfold_cache}` for future use.") 
 
     return openfold_cache, ckpt_root_file
 
@@ -242,10 +248,10 @@ def run_integration_tests() -> None:
 def main():
     """Main execution."""
     # Step 1: Set up conda environment
-    setup_conda_commands()
+    use_conda = check_conda_use()
 
     # Step 2: Set up OpenFold cache directory
-    openfold_cache, ckpt_root_file = setup_openfold_cache()
+    openfold_cache, ckpt_root_file = setup_openfold_cache(use_conda)
 
     # Step 3: Set up checkpoint directory
     param_dir, should_download = setup_param_directory(openfold_cache, ckpt_root_file)
