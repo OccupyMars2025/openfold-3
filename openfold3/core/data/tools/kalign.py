@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import shutil
+import tempfile
 import subprocess
 from functools import lru_cache
 
@@ -47,12 +48,19 @@ def run_kalign(
         )
 
     try:
-        result = subprocess.run(
-            ["kalign"], input=a3m_string, capture_output=True, text=True, check=True
-        )
+        with tempfile.NamedTemporaryFile(
+            mode="w+", suffix=".fasta", delete=True
+        ) as tmpf:
+            subprocess.run(
+                ["kalign", "-o", tmpf.name],
+                input=a3m_string,
+                text=True,
+                check=True,
+            )
 
-        # The resulting MSA is stored in the variable
-        alignment_result = result.stdout
+            # Read the result
+            tmpf.seek(0)
+            alignment_result = tmpf.read()
 
     except subprocess.CalledProcessError as e:
         print(f"Kalign command failed:\n{e.stderr}")
