@@ -323,6 +323,29 @@ def get_asym_id_to_canonical_seq_dict(
     }
 
 
+def get_label_to_author_chain_id_dict(
+    cif_file: CIFFile | BinaryCIFFile,
+) -> dict[str, str]:
+    """Get a mapping from label asym_id to author (pdb_strand_id) chain ID.
+
+    Reads from ``pdbx_poly_seq_scheme`` so no atom array is needed.
+
+    Args:
+        cif_file:
+            Parsed mmCIF file containing the structure.
+
+    Returns:
+        A dictionary mapping label asym IDs to author chain IDs.
+    """
+    block = cif_file.block
+    poly_scheme = block["pdbx_poly_seq_scheme"]
+    asym_ids = poly_scheme["asym_id"].as_array()
+    author_ids = poly_scheme["pdb_strand_id"].as_array()
+
+    _, idx = np.unique(asym_ids, return_index=True)
+    return dict(zip(asym_ids[idx].tolist(), author_ids[idx].tolist(), strict=True))
+
+
 def get_entity_to_three_letter_codes_dict(cif_data: CIFBlock) -> dict[int, list[str]]:
     """Get a dictionary mapping entity IDs to their three-letter-code sequences.
 

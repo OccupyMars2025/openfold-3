@@ -18,6 +18,7 @@ A3mParser
 )
 from openfold3.core.data.primitives.structure.metadata import (
 get_asym_id_to_canonical_seq_dict,
+get_label_to_author_chain_id_dict,
 )
 
 
@@ -57,21 +58,26 @@ class TestTemplatePreprocessor():
 
         chain_id_seq_map = get_asym_id_to_canonical_seq_dict(cif_file)
 
-        cif_data = get_cif_block(cif_file)
-        cif_data
+        # template.chain_id is an author chain ID; map it to label asym_id
+        label_to_author = get_label_to_author_chain_id_dict(cif_file)
+        author_to_label = {v: k for k, v in label_to_author.items()}
+        label_chain_id = author_to_label[template.chain_id]
 
-        template_sequence = chain_id_seq_map.get(template.chain_id)
+        template_sequence = chain_id_seq_map.get(label_chain_id)
 
         parser = A3mParser(max_sequences=None)
-        with pytest.raises(IndexError):
-            parser(
+        parsed = parser(
                 (
                     f">query_X/1-{len(query_seq_str)}\n"
                     f"{query_seq_str}\n"
-                    f">{template.entry_id}_{template.chain_id}/{1}-{len(template_sequence)}\n"
+                    f">{template.entry_id}_{label_chain_id}/{1}-{len(template_sequence)}\n"
                     f"{template_sequence}\n"
                 ),
                 query_seq_str,
                 realign=True,
             )
             
+        assert len(parsed) == 2
+        assert parsed[0].seq_id == 1
+        assert parsed[1].seq_id < 1
+        
