@@ -726,7 +726,7 @@ class A3mParser(TemplateParser):
             # - Realign is explicitly requested, O
             # - Headers lack coordinate information
             seq_list = [query_seq_str]
-            for header, seq in zip(headers_raw, alignments, strict=True):
+            for seq in alignments:
                 ungapped_seq = "".join(c for c in seq if c.isupper())
                 seq_list.append(ungapped_seq)
 
