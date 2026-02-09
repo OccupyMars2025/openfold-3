@@ -40,17 +40,18 @@ logger = logging.getLogger(__name__)
 def check_conda_use() -> bool:
     """Check the current environment and return environment info."""
     logger.info("Checking environment...")
-    
+
     use_conda = bool(os.environ.get("CONDA_PREFIX"))
     if use_conda:
         logger.info(
-        f"Running in conda environment: {os.path.basename(os.environ['CONDA_PREFIX'])}"
-    )
+            "Running in conda environment: "
+            f"{os.path.basename(os.environ['CONDA_PREFIX'])}"
+        )
     else:
         logger.info("Not running in a conda environment.")
         logger.info("The script will run without conda-specific features.")
-    
-    return use_conda 
+
+    return use_conda
 
 
 def setup_openfold_cache(use_conda) -> tuple[Path, Path]:
@@ -99,9 +100,13 @@ def setup_openfold_cache(use_conda) -> tuple[Path, Path]:
             )
             logger.warning("Variable is set for current session only")
     else:
-        logger.info("OPENFOLD_CACHE environment variable is set for current session only")
-        logger.info("If not using the default directory, please save "
-                    f"`export $OPENFOLD_CACHE={openfold_cache}` for future use.") 
+        logger.info(
+            "OPENFOLD_CACHE environment variable is set for current session only"
+        )
+        logger.info(
+            "If not using the default directory, please save "
+            f"`export $OPENFOLD_CACHE={openfold_cache}` for future use."
+        )
 
     return openfold_cache, ckpt_root_file
 
