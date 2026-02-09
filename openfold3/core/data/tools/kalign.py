@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import kalign
 from functools import lru_cache
+
+import kalign
 
 
 @lru_cache(maxsize=512)
@@ -29,7 +30,7 @@ def run_kalign(
 
     Args:
         sequences (list[str]):
-            Sequences to be aligned. In the template pipeline, 
+            Sequences to be aligned. In the template pipeline,
             the first sequence is the query, and the rest are templates
             sequences to be realigned to it from hmmsearch.
     Returns:
