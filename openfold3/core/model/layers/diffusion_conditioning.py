@@ -39,6 +39,7 @@ class DiffusionConditioning(nn.Module):
         max_relative_idx: int,
         max_relative_chain: int,
         sigma_data: float,
+        seed_fourier_emb: int = 42,
         linear_init_params: ConfigDict = lin_init.diffusion_cond_init,
         tune_chunk_size: bool = False,
     ):
@@ -58,6 +59,8 @@ class DiffusionConditioning(nn.Module):
                 Maximum relative chain indices clipped
             sigma_data:
                 Constant determined by data variance
+            seed_fourier_emb:
+                Random seed for initializing fourier embedding parameters
             linear_init_params:
                 Linear layer initialization parameters
             tune_chunk_size:
@@ -105,7 +108,7 @@ class DiffusionConditioning(nn.Module):
             self.c_s + self.c_s_input, self.c_s, **linear_init_params.linear_z
         )
 
-        self.fourier_emb = FourierEmbedding(c=c_fourier_emb)
+        self.fourier_emb = FourierEmbedding(c=c_fourier_emb, seed=seed_fourier_emb)
         self.layer_norm_n = LayerNorm(self.c_fourier_emb, create_offset=False)
         self.linear_n = Linear(
             self.c_fourier_emb, self.c_s, **linear_init_params.linear_n

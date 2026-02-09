@@ -60,12 +60,13 @@ if deepspeed_is_installed:
     import deepspeed
 
 logger = logging.getLogger(__name__)
-
 # We define extra metrics that will cause this warning depending on the training stage
 # Only metrics with values present are logged, so we can ignore this error
 warnings.filterwarnings(
     "ignore",
-    message=r"The `compute` method of metric .* was called before the `update` method",
+    message=(
+        r"The ``compute`` method of metric .* was called before the ``update`` method"
+    ),
     category=UserWarning,
     module="torchmetrics",
 )
@@ -104,12 +105,6 @@ class OpenFold3AllAtom(ModelRunner):
         self._setup_train_metrics()
         self._setup_val_metrics()
 
-        # Initialize the gradient manager if doing per-sample grad clipping
-        if self.per_sample_grad_clipping:
-            self.grad_manager.setup(
-                model=self.model, trainer=self.trainer, logger=self.logger
-            )
-
         # Keep grads enabled for confidence head parameters only
         if stage == "fit" and self.config.settings.train_confidence_only:
             exempt_submodule = [
@@ -121,6 +116,13 @@ class OpenFold3AllAtom(ModelRunner):
             ]
             self._freeze_model_params(exempt_submodule=exempt_submodule)
 
+        # Initialize the gradient manager if doing per-sample grad clipping
+        if self.per_sample_grad_clipping:
+            self.grad_manager.setup(
+                model=self.model, trainer=self.trainer, logger=self.logger
+            )
+            self._identify_confidence_params()
+
     def _freeze_model_params(self, exempt_submodule: list[torch.nn.Module]):
         """Freeze all model parameters excluding those specified in exempt_submodule."""
         for param in self.model.parameters():
@@ -130,6 +132,28 @@ class OpenFold3AllAtom(ModelRunner):
         for layer in exempt_submodule:
             for param in layer.parameters():
                 param.requires_grad = True
+
+    def _identify_confidence_params(self):
+        """
+        Identifies which parameters belong to confidence heads.
+        """
+        confidence_modules_prefixes = [
+            "aux_heads.pairformer_embedding",
+            "aux_heads.pde",
+            "aux_heads.plddt",
+            "aux_heads.experimentally_resolved",
+            "aux_heads.pae",
+        ]
+
+        self.confidence_param_names = set()
+
+        for name, _ in self.model.named_parameters():
+            # Check if this param belongs to confidence module
+            is_confidence = any(
+                name.startswith(f"{prefix}.") for prefix in confidence_modules_prefixes
+            )
+            if is_confidence:
+                self.confidence_param_names.add(name)
 
     def reseed(self, seed):
         pl.seed_everything(seed)
@@ -332,6 +356,30 @@ class OpenFold3AllAtom(ModelRunner):
         is_last_step_of_cycle = (batch_idx + 1) % accum_steps == 0
         return is_last_step_of_cycle or self.trainer.is_last_batch
 
+    def _get_sample_disabled_param_names(self, loss_weights: dict) -> set | None:
+        """
+        Returns a list of confidence head parameters that should be disabled
+        when counting grads across ranks, else None.
+        """
+        confidence_loss_name = (
+            self.config.architecture.loss_module.confidence_loss_names
+        )
+
+        total_conf_weight = sum(
+            loss_weights[name].item() for name in confidence_loss_name
+        )
+
+        is_valid_confidence_sample = total_conf_weight > 0
+
+        # Confidence losses valid are not valid for distillation samples or
+        # samples with resolution out-of-bounds
+        if not is_valid_confidence_sample:
+            # Return the pre-computed list of confidence param names
+            return self.confidence_param_names
+
+        # If no params are disabled, return None
+        return None
+
     def _training_step_manual_clip(self, batch, batch_idx):
         assert len(batch["pdb_id"]) == 1, (
             "Currently only local batch size of 1 per GPU is supported."
@@ -390,7 +438,13 @@ class OpenFold3AllAtom(ModelRunner):
                 loss, loss_breakdown = self.loss(batch, outputs, _return_breakdown=True)
 
                 self.manual_backward(loss)
-                self.grad_manager.clip_and_accumulate(logging_info=logging_info)
+
+                disabled_params = self._get_sample_disabled_param_names(
+                    loss_weights=batch["loss_weights"]
+                )
+                self.grad_manager.clip_and_accumulate(
+                    logging_info=logging_info, disabled_params=disabled_params
+                )
 
             if self._is_opt_step_ready(batch_idx):
                 # Average and sync grads
@@ -524,36 +578,6 @@ class OpenFold3AllAtom(ModelRunner):
         except Exception:
             logger.exception(f"Validation step failed with pdb id {', '.join(pdb_id)}")
             raise
-
-    def _save_train_dataset_state_to_datamodule(self):
-        self.trainer.datamodule.next_dataset_indices = (
-            self.trainer.train_dataloader.dataset.next_dataset_indices
-        )
-
-    def _load_train_dataset_state_from_datamodule(self):
-        self.trainer.train_dataloader.dataset.next_dataset_indices = (
-            self.trainer.datamodule.next_dataset_indices
-        )
-
-    def on_train_start(self):
-        # Reload state from datamodule in case checkpoint has been used
-        self._load_train_dataset_state_from_datamodule()
-        if self.global_rank == 0:
-            logger.debug(
-                f"Train start, setting up "
-                f"{self.trainer.train_dataloader.dataset.next_dataset_indices=}"
-            )
-
-    def on_train_epoch_start(self):
-        # At the start of each virtual epoch we want to resample the set of
-        # datapoints to train on
-        self.trainer.train_dataloader.dataset.resample_epoch()
-        self._save_train_dataset_state_to_datamodule()
-        if self.global_rank == 0:
-            logger.debug(
-                "Sampled batch indices: "
-                f"{self.trainer.train_dataloader.dataset.indices=}"
-            )
 
     def on_validation_epoch_start(self):
         # At the start of validation, load the EMA weights
@@ -756,10 +780,44 @@ class OpenFold3AllAtom(ModelRunner):
                 step=self.global_step - 1,
             )
 
+    def _get_train_sampler(self):
+        dl = self.trainer.train_dataloader
+        # If PL uses multiple loaders, dl can be CombinedLoader etc.
+        # Handle the simple/common case first:
+        sampler = getattr(dl, "sampler", None)
+
+        # If it's a BatchSampler, the underlying sampler is sampler.sampler
+        if (
+            sampler is not None
+            and hasattr(sampler, "sampler")
+            and (hasattr(sampler, "batch_size") and hasattr(sampler, "drop_last"))
+        ):
+            # only unwrap if it looks like a BatchSampler wrapper
+            # (BatchSampler has .sampler and .batch_size, .drop_last)
+            sampler = sampler.sampler
+        return sampler
+
+    def on_train_epoch_start(self):
+        sampler = self._get_train_sampler()
+
+        logger.info(
+            f"Rank - {self.global_rank} starting epoch {self.trainer.current_epoch} "
+            f"sampler epoch: {sampler.epoch} "
+            f"global_step={self.trainer.global_step} "
+            f"next_dataset_indices={self.trainer.datamodule.next_dataset_indices}"
+        )
+
     def on_train_epoch_end(self):
         """Log aggregated epoch metrics for training."""
         self._log_epoch_metrics(metrics=self.train_losses)
         self._log_epoch_metrics(metrics=self.train_metrics)
+        sampler = self._get_train_sampler()
+        logger.info(
+            f"Rank - {self.global_rank} finished epoch {self.trainer.current_epoch} "
+            f"sampler epoch: {sampler.epoch} "
+            f"global_step={self.trainer.global_step} "
+            f"next_dataset_indices={self.trainer.datamodule.next_dataset_indices}"
+        )
 
     def on_validation_epoch_end(self):
         """Log aggregated epoch metrics for validation."""

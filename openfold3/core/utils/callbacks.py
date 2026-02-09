@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import logging
 import random
 import time
 from pathlib import Path
@@ -23,6 +24,9 @@ import torch
 from lightning_fabric.utilities.rank_zero import (
     rank_zero_only,
 )
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class PredictTimer(pl.Callback):
@@ -142,9 +146,9 @@ class RankSpecificSeedCallback(pl.Callback):
         set_seed_for_rank(self.base_seed, rank)
         self._has_been_set = True
 
-        print(
-            f"SEEDING: Base seed set to {self.base_seed}. Rank {trainer.global_rank} "
-            f"initialized with seed {self.base_seed + rank}."
+        logging.info(
+            f"[rank: {trainer.global_rank}] Model base seed set to {self.base_seed}, "
+            f"rank initialized with seed {self.base_seed + rank}"
         )
 
 

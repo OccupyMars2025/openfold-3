@@ -219,6 +219,10 @@ class AuxiliaryHeadsAllAtom(nn.Module):
             token_feat=token_mask,
             max_num_atoms_per_token=self.max_atoms_per_token,
         )
+        # Expand to match sample dimension
+        max_atom_per_token_mask = max_atom_per_token_mask.expand(
+            (*atom_positions_predicted.shape[:-2], -1)
+        )
 
         si = si.to(device=out_device)
         aux_out["plddt_logits"] = self.plddt(

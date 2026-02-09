@@ -28,7 +28,7 @@ import openfold3.core.config.default_linear_init_config as lin_init
 from openfold3.core.model.layers.sequence_local_atom_attention import (
     AtomAttentionEncoder,
 )
-from openfold3.core.model.primitives import Linear, normal_init_
+from openfold3.core.model.primitives import Linear
 from openfold3.core.utils.relpos import relpos_complex
 from openfold3.core.utils.tensor_utils import add
 
@@ -569,18 +569,23 @@ class FourierEmbedding(nn.Module):
     Implements AF3 Algorithm 22.
     """
 
-    def __init__(self, c: int):
+    def __init__(self, c: int, seed: int = 42):
         """
         Args:
             c:
                 Embedding dimension
+            seed:
+                Random seed for initialization
         """
         super().__init__()
-        w = torch.empty((c, 1))
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+
+        w = torch.empty(c)
         b = torch.empty(c)
 
-        normal_init_(w)
-        normal_init_(b)
+        torch.nn.init.normal_(w, generator=generator)
+        torch.nn.init.uniform_(b, generator=generator)
 
         self.register_buffer("w", w)
         self.register_buffer("b", b)
@@ -593,5 +598,5 @@ class FourierEmbedding(nn.Module):
         Returns:
             [*, c] Embedding
         """
-        x = nn.functional.linear(x, self.w, self.b)
+        x = x * self.w + self.b
         return torch.cos(2 * torch.pi * x)

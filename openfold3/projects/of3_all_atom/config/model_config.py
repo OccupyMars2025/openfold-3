@@ -163,7 +163,8 @@ model_config = mlc.ConfigDict(
                 "c_s": c_s,
                 "c_z": c_z,
                 "num_recycles": 3,
-                "use_confidence_emb_prob": 1.0,  # Change to 0.8 after confirming
+                "sync_rollout_use_emb": False,
+                "use_confidence_emb_prob": 1.0,
                 "diffusion": {
                     "sigma_data": sigma_data,
                     "no_samples": 48,
@@ -171,7 +172,7 @@ model_config = mlc.ConfigDict(
                     "no_full_rollout_samples": 5,
                     "no_mini_rollout_steps": 20,
                     "no_full_rollout_steps": 200,
-                    "use_conditioning_prob": 1.0,  # Change to 0.8 after confirming
+                    "use_conditioning_prob": 1.0,
                 },
             },
             "input_embedder": {
@@ -232,6 +233,7 @@ model_config = mlc.ConfigDict(
                     "tri_mul_first": True,
                     "fuse_projection_weights": False,
                     "blocks_per_ckpt": blocks_per_ckpt,
+                    "ckpt_per_template": False,
                     "inf": inf,
                     "linear_init_params": lin_init.pair_block_init,
                     "use_reentrant": False,
@@ -309,6 +311,7 @@ model_config = mlc.ConfigDict(
                     "c_fourier_emb": 256,
                     "max_relative_idx": max_relative_idx,
                     "max_relative_chain": max_relative_chain,
+                    "seed_fourier_emb": 42,
                     "linear_init_params": lin_init.diffusion_cond_init,
                     "tune_chunk_size": tune_chunk_size,
                 },
@@ -534,7 +537,7 @@ model_config = mlc.ConfigDict(
                     "ptm_weight": 0.2,
                     "iptm_weight": 0.8,
                     "disorder_weight": 0.5,
-                    "has_clash_weight": -100.0,
+                    "has_clash_weight": 100.0,
                     "disorder_threshold": 0.581,
                 },
                 "chain_pair_iptm": {"enabled": True},

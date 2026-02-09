@@ -63,8 +63,17 @@ class ValidationPDBDataset(BaseOF3Dataset):
         # Dataset/datapoint cache
         self.create_datapoint_cache()
 
-        # Cropping is turned off
-        self.apply_crop = False
+        # Cropping should be disabled for validation datasets
+        if self.crop["token_crop"]["enabled"]:
+            logger.warning(
+                "Token cropping is enabled for ValidationPDBDataset. Make sure this is"
+                " intended."
+            )
+        if self.crop["chain_crop"]["enabled"]:
+            logger.warning(
+                "Chain cropping is enabled for ValidationPDBDataset. Make sure this is"
+                " intended."
+            )
 
     def create_datapoint_cache(self):
         """Creates the datapoint_cache for iterating over each sample.
@@ -140,10 +149,11 @@ class ValidationPDBDataset(BaseOF3Dataset):
 
             except Exception as e:
                 tb = traceback.format_exc()
+                dataset_name = self.get_class_name()
                 logger.warning(
                     "-" * 40
                     + "\n"
-                    + f"Failed to process ValidationPDBDataset entry {pdb_id}:"
+                    + f"Failed to process {dataset_name} entry {pdb_id}:"
                     + f" {str(e)}\n"
                     + f"Exception type: {type(e).__name__}\nTraceback: {tb}"
                     + "-" * 40
