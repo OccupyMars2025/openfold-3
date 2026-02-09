@@ -30,12 +30,6 @@ to install GPU accelerated {doc}`cuEquivariance attention kernels <kernels>`, us
 pip install openfold3[cuequivariance]
 ```
 
-3. Install `kalign2` using mamba.
-
-```bash
-mamba install kalign2 -c bioconda
-```
-
 ### OpenFold3 Docker Image
 
 The OpenFold3 Docker Image is now available on Docker Hub: [openfoldconsortium/openfold3](https://hub.docker.com/repository/docker/openfoldconsortium/openfold3/general)
