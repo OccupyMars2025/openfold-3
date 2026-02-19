@@ -38,12 +38,48 @@ mamba install kalign2 -c bioconda
 
 ### OpenFold3 Docker Image
 
+#### Dockerhub
+
 The OpenFold3 Docker Image is now available on Docker Hub: [openfoldconsortium/openfold3](https://hub.docker.com/repository/docker/openfoldconsortium/openfold3/general)
 
 To get the latest stable version, you can use the following command
 
 ```bash
 docker pull openfoldconsortium/openfold3:stable
+```
+
+#### GitHub Container Registry (GHCR)
+
+You can download the openfold3 docker image from GHCR, you'll need to install 'gh-cli' first, instructions [here](https://github.com/cli/cli/blob/trunk/docs/install_linux.md). 
+
+You'll need to authenticate with GitHub, make sure you request the `read:packages` scope. 
+
+```bash
+gh auth login --scopes read:packages
+```
+
+Verify that login succeeded and scope is assigned 
+
+```bash
+gh auth status 
+github.com
+  ✓ Logged in to github.com account ******* (/home/ubuntu/.config/gh/hosts.yml)
+  - Active account: true
+  - Git operations protocol: ssh
+  - Token: gho_************************************
+  - Token scopes: 'admin:public_key', 'gist', 'read:org', 'read:packages', 'repo'
+```
+
+Let's inject the GitHub token into the docker config. Note this will expire. 
+
+```bash
+gh auth token | docker login ghcr.io -u $(gh api user --jq .login) --password-stdin
+```
+
+Pull the image itself 
+
+```bash
+docker pull ghcr.io/aqlaboratory/openfold-3/openfold3-docker:0.4.0
 ```
 
 ### Building the OpenFold3 Docker Image 
