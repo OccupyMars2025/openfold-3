@@ -219,6 +219,7 @@ def run_integration_tests() -> None:
             Path(__file__).parent / "tests/test_inference_full.py",
             "-m",
             "inference_verification",
+            "--skip-ccd-update",
         ]
     )
 
