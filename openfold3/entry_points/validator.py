@@ -28,7 +28,7 @@ from openfold3.core.data.pipelines.preprocessing.template import (
     TemplatePreprocessorSettings,
 )
 from openfold3.core.data.tools.colabfold_msa_server import MsaComputationSettings
-from openfold3.entry_points.download_parameters import (
+from openfold3.entry_points.parameters import (
     CHECKPOINT_NAME,
     CHECKPOINT_ROOT_FILENAME,
     DEFAULT_CACHE_PATH,

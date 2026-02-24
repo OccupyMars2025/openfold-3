@@ -27,7 +27,7 @@ from pathlib import Path
 import biotite.setup_ccd
 
 from openfold3.core.utils.s3 import download_s3_file, s3_file_matches_local
-from openfold3.entry_points.download_parameters import (
+from openfold3.entry_points.parameters import (
     CHECKPOINT_NAME,
     download_model_parameters,
 )

@@ -528,7 +528,7 @@ class TestInferenceCheckpointLoading:
     def test_inference_ckpt_path_defaults(self, tmp_path):
         with (
             patch("builtins.input", return_value="yes"),
-            patch("openfold3.entry_points.download_parameters.download_s3_file"),
+            patch("openfold3.entry_points.parameters.download_s3_file"),
         ):
             expt_config = InferenceExperimentConfig.model_validate(
                 {"cache_path": tmp_path}
